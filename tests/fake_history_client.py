@@ -49,6 +49,12 @@ def net(idx):
     return sum(net_pattern(nb, idx) for nb in ("AT", "SK", "RO", "HR", "SI", "RS")) * (1 + 0.15 * (year_f(idx) - 2019) / 7)
 
 
+def same_offset(start, end):
+    """Az entsoe-py truncate-je ezt a hibát dobja, ha a két időpont időzónája eltér."""
+    if start.tz != end.tz:
+        raise ValueError("Both dates must have the same UTC offset")
+
+
 class FakeHistoryClient:
     def __init__(self, now):
         self.now = now
@@ -79,6 +85,7 @@ class FakeHistoryClient:
         return pd.DataFrame(cols, index=idx.tz_convert(BUD))
 
     def query_day_ahead_prices(self, zone, start, end, **kw):
+        same_offset(start, end)
         self.calls.append(("price", start.year))
         if zone in ("RS", "UA"):
             raise NoMatchingDataError
@@ -106,6 +113,7 @@ class FakeHistoryClient:
         return pd.Series(v, index=idx.tz_convert(BRU))
 
     def query_installed_generation_capacity(self, zone, start, end, **kw):
+        same_offset(start, end)
         years = list(range(start.year, end.year + 1))
         rows = []
         for yr in years:

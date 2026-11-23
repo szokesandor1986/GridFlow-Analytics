@@ -4,6 +4,6 @@ __SITE__ {
 	root * /var/www/hu-aramlas
 	encode gzip
 	file_server
-	@data path /data.json /demo-data.json
+	@data path /data.json /engineer.json /europe.json /history.json /gas.json /frequency.json /demo-gas.json /demo-frequency.json /demo-data.json /demo-engineer.json /demo-europe.json /demo-history.json
 	header @data Cache-Control "no-store"
 }

@@ -24,7 +24,7 @@ concurrency:
 jobs:
   feltoltes:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,8 @@ jobs:
         run: |
           mkdir -p dist
           python collector.py --out dist/data.json
-          cp index.html demo-data.json dist/
+          cp index.html muszaki.html europa.html demo-data.json demo-engineer.json demo-europe.json demo-history.json demo-gas.json demo-frequency.json dist/
+          for f in history.json gas.json; do [ -f "$f" ] && cp "$f" dist/; done; true
 
       - name: Feltöltés a tárhelyre (FTPS)
         env:

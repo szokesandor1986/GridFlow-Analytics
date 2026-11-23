@@ -1,5 +1,5 @@
 [Unit]
-Description=ENTSO-E adatgyűjtés (határkeresztező áramlás és day-ahead árak)
+Description=ENTSO-E adatgyűjtés (határáramlás, árak és mérnöki adatkörök)
 Wants=network-online.target
 After=network-online.target
 
@@ -9,7 +9,7 @@ User=aramlas
 Group=aramlas
 EnvironmentFile=/etc/hu-aramlas.env
 ExecStart=/opt/hu-aramlas/venv/bin/python /opt/hu-aramlas/collector.py --out /var/www/hu-aramlas/data.json
-TimeoutStartSec=300
+TimeoutStartSec=600
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

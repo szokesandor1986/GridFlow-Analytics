@@ -86,21 +86,35 @@ class Batch:
         self.futs = {}
         self.tries, self.wait = tries, wait
         self.errors, self.missing, self.skipped = [], [], 0
+        self.msgs, self.dur = {}, {}          # hibaüzenet és futásidő kulcsonként (a hibakereséshez)
 
-    def _run(self, fn):
+    def _run(self, fn, key=None):
         if time.monotonic() > self.deadline:
             return "skip", None
+        t0 = time.monotonic()
         try:
             v = with_retry(fn, tries=self.tries, wait=self.wait)
         except Exception as exc:  # noqa: BLE001
             name = exc.__class__.__name__
+            self.dur[key] = time.monotonic() - t0
+            if name not in NO_DATA:
+                self.msgs[key] = " ".join(str(exc).split())[:140]
             return ("nodata" if name in NO_DATA else "err:" + name), None
+        self.dur[key] = time.monotonic() - t0
         if v is None or (hasattr(v, "__len__") and len(v) == 0):
             return "nodata", None
         return "ok", v
 
     def add(self, key, fn):
-        self.futs[key] = self.ex.submit(self._run, fn)
+        self.futs[key] = self.ex.submit(self._run, fn, key)
+
+    def status(self, key):
+        """"ok" | "nodata" | "skip" | "err" – a kérés végállapota (megvárja, míg lefut)."""
+        st = self.futs[key].result()[0]
+        return "err" if st.startswith("err:") else st
+
+    def slowest(self, n=5):
+        return sorted(((round(d), k) for k, d in self.dur.items()), reverse=True)[:n]
 
     def get(self, key):
         """Az eredmény (vagy None). A hiányt és a hibát feljegyzi. 401/403 esetén a SystemExit továbbmegy."""
@@ -112,7 +126,8 @@ class Batch:
         elif st == "nodata":
             self.missing.append(key)
         else:
-            self.errors.append(f"{key}: {st[4:]}")
+            msg = self.msgs.get(key)
+            self.errors.append(f"{key}: {st[4:]}" + (f" ({msg})" if msg else ""))
         return None
 
     def close(self):

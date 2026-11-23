@@ -16,6 +16,9 @@ Havi összesítések (helyi, budapesti idő szerinti hónapok):
 Használat:
     export ENTSOE_TOKEN=...
     python history.py --out history.json [--from-year 2019] [--workers 8] [--budget 1500]
+    python history.py --years 2026,2025 --base history.json --out part-0.json     # csak ezek az évek (párhuzamos futáshoz)
+    python history.py --merge part-0.json part-1.json --base history.json --out history.json
+    python history.py --plan 2 --base history.json                                 # a hiányzó évek 2 évenkénti csoportjai (JSON)
 """
 import argparse
 import json
@@ -219,34 +222,73 @@ def installed_by_year(df):
     return out
 
 
-def collect_history(client, now=None, from_year=2019, existing=None, budget_s=1500, workers=8):
+def snapshot(hist, now, errors, missing=()):
+    """A history.json teljes, érvényes alakja a jelenlegi állapotból (a végén és a köztes mentéseknél is ez készül)."""
+    out = dict(hist)
+    out["months"] = dict(sorted(hist["months"].items()))
+    out["annual"] = dict(sorted(hist["annual"].items()))
+    out["years_done"] = out["years_complete"] = sorted(set(hist["years_done"]))   # csak az hiánytalanul letöltött év
+    out["generated_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    out["source"] = "ENTSO-E Transparency Platform"
+    out["demo"] = False
+    out["zones"] = ZONES
+    out["names"] = col.EUROPE_ZONES
+    out["errors"] = list(errors)
+    out["missing"] = list(missing)
+    out["co2"] = {"factors": col.CO2_FACTORS, "source": col.CO2_SOURCE}
+    return out
+
+
+def years_todo(existing, now, from_year=2019, years=None):
+    """Mely éveket kell (újra) letölteni: ami nincs hiánytalanul meg, és mindig a folyó év.
+    A "years_done" régi kulcsot nem vesszük figyelembe, mert az korábban hiányos évet is lezártnak jelölhetett."""
+    this_year = now.tz_convert(BUD).year
+    done = set((existing or {}).get("years_complete", []))
+    pool = list(years) if years else range(from_year, this_year + 1)
+    return sorted({y for y in pool if y not in done or y == this_year}, reverse=True)
+
+
+def plan_groups(existing, now, per_group=2, from_year=2019):
+    """A munka szétosztása párhuzamos futásokra: ["2026,2025", "2024,2023", ...] (csak a hiányzó évek)."""
+    todo = years_todo(existing, now, from_year)
+    return [",".join(str(y) for y in todo[i:i + per_group]) for i in range(0, len(todo), per_group)]
+
+
+def collect_history(client, now=None, from_year=2019, existing=None, budget_s=1500, workers=8, on_progress=None, years=None):
     now = now or pd.Timestamp.now(tz="UTC")
     existing = existing or {}
     hist = {
         "schema": SCHEMA, "months": dict(existing.get("months", {})), "annual": dict(existing.get("annual", {})),
-        "years_done": list(existing.get("years_done", [])),
+        "years_done": [y for y in existing.get("years_complete", [])],
     }
     this_year = now.tz_convert(BUD).year
     # A lezárt évet február 1-ig még újra letöltjük (utólagos adatjavítások); a folyó évet mindig.
-    todo = [y for y in range(from_year, this_year + 1) if y not in hist["years_done"] or y == this_year]
-    todo = sorted(set(todo), reverse=True)           # a legfrissebb év az első: ha az időkeret kifogy, az régebbi marad ki
+    todo = years_todo(existing, now, from_year, years)      # a legfrissebb év az első: ha az időkeret kifogy, az régebbi marad ki
+    now_bud = now.tz_convert(BUD)
 
     B = Batch(budget_s, workers=workers)
-    rng = {}
+    rng, ykeys = {}, {}
     for y in todo:
         s = pd.Timestamp(f"{y}-01-01", tz=BUD)
-        e = min(pd.Timestamp(f"{y + 1}-01-01", tz=BUD), now.ceil("h"))
+        # FONTOS: s és e azonos időzónában legyen, különben az entsoe-py truncate-je
+        # "Both dates must have the same UTC offset" ValueError-t dob (a folyó évnél ez minden árlekérdezést elrontott).
+        e = min(pd.Timestamp(f"{y + 1}-01-01", tz=BUD), now_bud.ceil("h"))
         rng[y] = (s, e)
-        B.add(f"fogyasztás {y}", lambda s=s, e=e: client.query_load(HOME, start=s, end=e))
-        B.add(f"termelés {y}", lambda s=s, e=e: client.query_generation(HOME, start=s, end=e, nett=True))
+        ykeys[y] = []
+
+        def add(key, fn, y=y):
+            ykeys[y].append(key)
+            B.add(key, fn)
+        add(f"fogyasztás {y}", lambda s=s, e=e: client.query_load(HOME, start=s, end=e))
+        add(f"termelés {y}", lambda s=s, e=e: client.query_generation(HOME, start=s, end=e, nett=True))
         for z in ZONES:
-            B.add(f"ár {z} {y}", lambda z=z, s=s, e=e: client.query_day_ahead_prices(z, start=s, end=e))
+            add(f"ár {z} {y}", lambda z=z, s=s, e=e: client.query_day_ahead_prices(z, start=s, end=e))
         for code in NEIGHBOURS:
-            B.add(f"import {code} {y}", lambda code=code, s=s, e=e: client.query_crossborder_flows(code, HOME, start=s, end=e))
-            B.add(f"export {code} {y}", lambda code=code, s=s, e=e: client.query_crossborder_flows(HOME, code, start=s, end=e))
+            add(f"import {code} {y}", lambda code=code, s=s, e=e: client.query_crossborder_flows(code, HOME, start=s, end=e))
+            add(f"export {code} {y}", lambda code=code, s=s, e=e: client.query_crossborder_flows(HOME, code, start=s, end=e))
     first = pd.Timestamp(f"{min(todo)}-01-01", tz=BUD) if todo else None
     if todo:
-        B.add("beépített teljesítmény", lambda: client.query_installed_generation_capacity(HOME, start=first, end=now))
+        B.add("beépített teljesítmény", lambda: client.query_installed_generation_capacity(HOME, start=first, end=now_bud))
 
     problems = []
     for y in todo:
@@ -277,36 +319,96 @@ def collect_history(client, now=None, from_year=2019, existing=None, budget_s=15
         if ldc:
             a["ldc"] = ldc
             a["ldc_partial"] = y >= this_year
-        # lezárt: ha az év véget ért és már február van, nem töltjük le újra
-        full = now.tz_convert(BUD) >= pd.Timestamp(f"{y + 1}-02-01", tz=BUD)
-        if full and y not in hist["years_done"]:
+        # lezárt: az év véget ért, már február van ÉS minden lekérdezése lefutott (adat vagy "nincs adat"); különben
+        # a következő futás újra próbálja – így nem marad észrevétlen lyuk.
+        stat = {k: B.status(k) for k in ykeys[y]}
+        bad = sorted(k for k, v in stat.items() if v in ("err", "skip"))
+        full = now_bud >= pd.Timestamp(f"{y + 1}-02-01", tz=BUD)
+        if bad:
+            problems.append(f"{y}: hiányos ({len(bad)} lekérdezés nem futott le) – a következő futás újra próbálja")
+        elif full and y not in hist["years_done"]:
             hist["years_done"].append(y)
+        print(f"  {y}: kész | " + ", ".join(f"{n} {sum(1 for v in stat.values() if v == n)}" for n in ("ok", "nodata", "err", "skip")), flush=True)
+        if on_progress:      # köztes mentés: egy megszakadt futás se veszítse el a már feldolgozott éveket
+            on_progress(snapshot(hist, now, problems + ["köztes mentés: a futás még tart"]))
     inst = installed_by_year(B.get("beépített teljesítmény")) if todo else {}
     for y, v in inst.items():
-        hist["annual"].setdefault(y, {})["inst"] = v
+        if int(y) in todo:
+            hist["annual"].setdefault(y, {})["inst"] = v
     B.close()
+    if B.dur:
+        print("  leglassabb lekérdezések (s): " + "; ".join(f"{k} {d}" for d, k in B.slowest()), flush=True)
 
-    hist["months"] = dict(sorted(hist["months"].items()))
-    hist["annual"] = dict(sorted(hist["annual"].items()))
-    hist["years_done"] = sorted(set(hist["years_done"]))
-    hist["generated_utc"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    hist["source"] = "ENTSO-E Transparency Platform"
-    hist["demo"] = False
-    hist["zones"] = ZONES
-    hist["names"] = col.EUROPE_ZONES
-    hist["errors"] = problems + B.errors + B.notes()
-    hist["missing"] = B.missing
-    hist["co2"] = {"factors": col.CO2_FACTORS, "source": col.CO2_SOURCE}
-    return hist
+    out = snapshot(hist, now, problems + B.errors + B.notes(), B.missing)
+    if years:
+        out["part_years"] = todo
+    return out
+
+
+def merge_parts(base, parts, now=None):
+    """Párhuzamos futások részeredményeinek összefésülése a meglévő history.json-ra.
+    A részek csak a saját éveiket (part_years) írják felül; ami hiányzik, az a régi értékén marad."""
+    now = now or pd.Timestamp.now(tz="UTC")
+    hist = {
+        "schema": SCHEMA, "months": dict(base.get("months", {})),
+        "annual": {k: dict(v) for k, v in base.get("annual", {}).items()},
+        "years_done": [y for y in base.get("years_complete", [])],
+    }
+    errors, missing, notes = [], [], []
+    for n, part in enumerate(parts, 1):
+        ys = {int(y) for y in part.get("part_years", [])}
+        got = 0
+        for k, r in part.get("months", {}).items():
+            if int(k[:4]) in ys:
+                hist["months"][k] = r
+                got += 1
+        for y, a in part.get("annual", {}).items():
+            if int(y) in ys:
+                hist["annual"].setdefault(y, {}).update(a)
+        for y in part.get("years_complete", []):
+            if y in ys and y not in hist["years_done"]:
+                hist["years_done"].append(y)
+        errors += part.get("errors", [])
+        missing += part.get("missing", [])
+        notes.append(f"rész {n}: évek {sorted(ys, reverse=True)}, {got} havi rekord")
+    return snapshot(hist, now, errors, missing), notes
+
+
+def read_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--out", default="history.json")
+    p.add_argument("--base", help="a meglévő history.json (alapértelmezés: --out)")
     p.add_argument("--from-year", type=int, default=2019)
+    p.add_argument("--years", help="csak ezek az évek, vesszővel elválasztva (pl. 2026,2025)")
+    p.add_argument("--plan", type=int, metavar="N", help="kiírja a hiányzó éveket N évesre osztott csoportokban (JSON), nem tölt le semmit")
+    p.add_argument("--merge", nargs="+", metavar="PART.json", help="részeredmények összefésülése a --base fájlra, nem tölt le semmit")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--budget", type=int, default=1500, help="időkeret másodpercben")
     args = p.parse_args()
+    base = read_json(args.base or args.out)
+
+    if args.plan:
+        print(json.dumps(plan_groups(base, pd.Timestamp.now(tz="UTC"), args.plan, args.from_year)))
+        return
+    if args.merge:
+        parts = [read_json(f) for f in args.merge]
+        parts = [x for x in parts if x.get("months")]
+        if not parts:
+            sys.exit("Egyetlen részeredmény sem érkezett; a history.json változatlan marad.")
+        out, notes = merge_parts(base, parts)
+        col.write_json(args.out, out)
+        print(f"Összefésülve: {len(parts)} rész | hónapok: {len(out['months'])} | hiánytalan évek: {out['years_complete']}")
+        for n in notes + out["errors"]:
+            print("  -", n)
+        return
 
     token = os.environ.get("ENTSOE_TOKEN", "").strip()
     if not token:
@@ -314,19 +416,14 @@ def main():
     from entsoe import EntsoePandasClient
 
     client = EntsoePandasClient(api_key=token, retry_count=2, retry_delay=5, timeout=90)
-    existing = {}
-    if os.path.exists(args.out):
-        try:
-            with open(args.out, encoding="utf-8") as f:
-                existing = json.load(f)
-        except (OSError, ValueError):
-            existing = {}
+    years = [int(x) for x in args.years.replace(" ", "").split(",") if x] if args.years else None
     t0 = time.monotonic()
-    hist = collect_history(client, from_year=args.from_year, existing=existing, budget_s=args.budget, workers=args.workers)
+    hist = collect_history(client, from_year=args.from_year, existing=base, budget_s=args.budget, workers=args.workers,
+                           on_progress=lambda h: col.write_json(args.out, {**h, **({"part_years": years} if years else {})}), years=years)
     if not hist["months"]:
         sys.exit("Nem készült egyetlen havi rekord sem; a history.json nem íródik felül.")
     col.write_json(args.out, hist)
-    print(f"Kész: {args.out} | hónapok: {len(hist['months'])} | lezárt évek: {hist['years_done']} | "
+    print(f"Kész: {args.out} | hónapok: {len(hist['months'])} | hiánytalan évek: {hist['years_complete']} | "
           f"hibák: {len(hist['errors'])} | {time.monotonic() - t0:.0f} s")
     for e in hist["errors"]:
         print("  -", e)

@@ -62,3 +62,16 @@ g["demo"] = True
 g["source"] = "DEMO – szintetikus adat, nem valós mérés"
 (ROOT / "demo-gas.json").write_text(json.dumps(g, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 print("gáz: napok", len(g["agsi"]["dates"]), "| pontok", len(g["flows"]["points"]), "| hibák", g["errors"])
+
+# frekvencia fül: kitalált Energy-Charts kliens (60 nap, mai nap 13:20 UTC-ig)
+from datetime import datetime as _dt, timezone as _tz  # noqa: E402
+fspec = importlib.util.spec_from_file_location("freq", ROOT / "freq.py")
+fq = importlib.util.module_from_spec(fspec)
+fspec.loader.exec_module(fq)
+from fake_freq_client import FakeEnergyCharts  # noqa: E402
+_now = _dt(2026, 11, 23, 13, 20, tzinfo=_tz.utc)
+fr, _ = fq.collect(FakeEnergyCharts(_now), None, _now.date(), fq.Throttle(gap=0), max_fetch=60, keep_days=60)
+fr["demo"] = True
+fr["source"] = "DEMO – szintetikus adat, nem valós mérés"
+(ROOT / "demo-frequency.json").write_text(json.dumps(fr, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+print("frekvencia: napok", len(fr["daily"]), "| hibák", fr["errors"])

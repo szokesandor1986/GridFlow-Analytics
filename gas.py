@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Földgáz-adatgyűjtő a "Gáztározók" fülhöz (gaz.html). Kimenet: gas.json.
+"""Földgáz-adatgyűjtő az Európa és trendek oldal földgáz-szekcióihoz (europa.html). Kimenet: gas.json.
 
 Két forrás, egymástól függetlenül (az egyik hibája nem viszi el a másikat):
 

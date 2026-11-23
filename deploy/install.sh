@@ -21,7 +21,7 @@ mkdir -p "$APP" "$WEB"
 python3 -m venv "$APP/venv"
 "$APP/venv/bin/pip" install -q -r "$SRC/requirements.txt"
 install -m 0644 "$SRC/collector.py" "$APP/collector.py"
-install -m 0644 "$SRC/index.html" "$SRC/demo-data.json" "$WEB/"
+install -m 0644 "$SRC/index.html" "$SRC/muszaki.html" "$SRC/europa.html" "$SRC/demo-data.json" "$SRC/demo-engineer.json" "$SRC/demo-europe.json" "$SRC/demo-history.json" "$SRC/demo-gas.json" "$SRC/demo-frequency.json" "$WEB/"
 chown -R aramlas:aramlas "$WEB"
 
 # Token: a környezetből vagy kérdezve (nem látszik a képernyőn, nem kerül parancssorba).
