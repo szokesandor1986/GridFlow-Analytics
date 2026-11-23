@@ -50,3 +50,15 @@ print("europe zónák:", sorted(eu["zones"]), "| history hónapok:", len(h["mont
 
 print("ok | utolsó teljes óra:", main["last_complete_ts"], "| fő hibák:", main["errors"], "| mérnöki hibák:", eng["errors"])
 print("modulok:", {k: v for k, v in eng["modules"].items()})
+
+# gáz fül: kitalált AGSI+/ENTSOG kliens
+from datetime import date as _date  # noqa: E402
+gspec = importlib.util.spec_from_file_location("gas", ROOT / "gas.py")
+gas = importlib.util.module_from_spec(gspec)
+gspec.loader.exec_module(gas)
+from fake_gas_client import FakeHttp  # noqa: E402
+g = gas.collect(FakeHttp(_date(2026, 11, 23)), "demo", None, today=_date(2026, 11, 23), throttle=gas.Throttle(gap=0))
+g["demo"] = True
+g["source"] = "DEMO – szintetikus adat, nem valós mérés"
+(ROOT / "demo-gas.json").write_text(json.dumps(g, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+print("gáz: napok", len(g["agsi"]["dates"]), "| pontok", len(g["flows"]["points"]), "| hibák", g["errors"])
