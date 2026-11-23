@@ -93,11 +93,17 @@ td.nm small{color:var(--muted);font-weight:500;margin-left:4px}
 footer{margin-top:22px;color:var(--ink2);font-size:13px}
 footer p{margin:0 0 8px;max-width:90ch}
 .err{padding:18px;color:var(--ink2)}
+nav.tabs{display:flex;gap:6px;margin:0 0 14px}
+nav.tabs a{padding:7px 14px;border-radius:999px;border:1px solid var(--grid);color:var(--ink2);text-decoration:none;font-size:14px;background:var(--surface)}
+nav.tabs a[aria-current="page"]{color:var(--ink);border-color:var(--ink2);font-weight:650}
+.mapwrap{position:relative;width:100%}
+.mapwrap svg{display:block;width:100%;height:auto;overflow:visible}
 text{font-family:inherit}
 </style>
 </head>
 <body>
 <main>
+  <nav class="tabs" aria-label="Nézetek"><a href="index.html" aria-current="page">Áttekintés</a><a href="muszaki.html">Mérnöki nézet</a></nav>
   <div id="banners"></div>
   <header>
     <h1>Határkeresztező villamosenergia-áramlás</h1>
@@ -106,6 +112,12 @@ text{font-family:inherit}
   </header>
 
   <section class="card" id="heroCard" aria-live="polite"></section>
+
+  <section class="card">
+    <h2>Merre folyik a villamos energia?</h2>
+    <p class="hint">A nyilak a legutóbbi olyan órára vonatkoznak, amelyre minden határ adata megvan. Kék nyíl: import Magyarországra, piros: export. A nyíl vastagsága és hossza a nettó teljesítménnyel arányos. Sematikus vázlat, nem pontos térkép.</p>
+    <div class="mapwrap" id="mapWrap" role="img" aria-label="Magyarország sematikus térképe a határkeresztező áramlások nyilaival"></div>
+  </section>
 
   <section class="card">
     <h2>Határonkénti áramlás</h2>
@@ -203,7 +215,7 @@ function model(){
 function render(){
   banners(); meta(); hero(); borders(); chips(); renderCharts(); foot();
 }
-function renderCharts(){ netChart(); priceChart(); }
+function renderCharts(){ mapCard(); netChart(); priceChart(); }
 
 function banners(){
   const b = [];
@@ -283,6 +295,64 @@ function chips(){
   };
   if (D.prices.zones.HU) mk("HU", true);
   zones.forEach(z => mk(z, false));
+}
+
+
+// ---------- Magyarország sematikus vázlata nyilakkal
+const HU_POLY = [[16.11,46.87],[16.28,46.98],[16.42,47.15],[16.45,47.40],[16.52,47.55],[16.59,47.68],[16.85,47.70],[17.05,47.75],[17.10,47.87],[17.17,48.00],
+  [17.45,47.88],[17.80,47.75],[18.12,47.76],[18.50,47.76],[18.75,47.80],[18.87,47.82],[18.95,47.95],[19.07,48.06],[19.35,48.08],[19.65,48.24],[19.90,48.16],[20.20,48.30],[20.45,48.45],[20.75,48.57],[21.10,48.52],[21.45,48.55],[21.72,48.35],
+  [22.15,48.40],[22.35,48.32],[22.55,48.22],[22.75,48.10],[22.90,47.95],[22.70,47.85],[22.45,47.78],[22.35,47.55],[22.05,47.52],[21.95,47.25],[21.75,47.05],[21.55,46.75],[21.30,46.62],[21.12,46.30],[20.75,46.17],
+  [20.55,46.12],[20.25,46.13],[20.05,46.17],[19.75,46.15],[19.40,46.05],[19.15,45.98],[18.93,45.93],[18.80,45.88],[18.60,45.80],[18.30,45.78],[18.00,45.82],[17.70,45.92],[17.45,45.97],[17.15,46.10],[16.90,46.30],[16.60,46.47],
+  [16.40,46.52],[16.22,46.70]];
+// határpont (lon, lat) és kifelé mutató irány (képernyő-koordinátában)
+const MAP_B = {
+  AT:{p:[16.45,47.30], d:[-1,-0.15]}, SK:{p:[19.30,48.08], d:[0.1,-1]}, UA:{p:[22.55,48.22], d:[0.75,-0.65]},
+  RO:{p:[21.95,47.30], d:[1,0.1]}, RS:{p:[19.75,46.15], d:[0.05,1]}, HR:{p:[17.45,45.97], d:[-0.25,1]}, SI:{p:[16.31,46.60], d:[-0.85,0.5]}
+};
+function mapCard(){
+  const host = $("mapWrap"); host.innerHTML = "";
+  const i = M.lastIdx;
+  if (i < 0){ host.innerHTML = '<div class="err">Nincs elég áramlási adat a vázlathoz.</div>'; return; }
+  const W = Math.max(320, host.clientWidth), VW = 700, VY = 62, VH = 350, sc = W / VW, narrow = W < 520;
+  const fs = Math.max(11.5, (narrow ? 14 : 13) / sc), svg = el("svg", {viewBox:"0 " + VY + " " + VW + " " + VH, width:W, height:W * VH / VW}, host);
+  const PX = (lon, lat) => [(lon - 15.7) * 60 + 70, (48.9 - lat) * 88 + 52];
+  const ink = css("--ink"), ink2 = css("--ink2"), muted = css("--muted"), surf = css("--surface");
+  el("path", {d:HU_POLY.map((p, k) => (k ? "L" : "M") + PX(p[0], p[1]).map(v => v.toFixed(1)).join(" ")).join("") + "Z", fill:css("--neutral"), stroke:muted, "stroke-width":1.5, "stroke-linejoin":"round"}, svg);
+  const rows = D.borders.map(b => {
+    const imp = b.import_mw[i], exp = b.export_mw[i], has = imp != null || exp != null;
+    return {b, net: has ? (imp || 0) - (exp || 0) : null};
+  });
+  const maxv = Math.max(300, ...rows.map(r => r.net == null ? 0 : Math.abs(r.net)));
+  rows.forEach(r => {
+    const g = MAP_B[r.b.code]; if (!g) return;
+    const [bx, by] = PX(g.p[0], g.p[1]), dl = Math.hypot(g.d[0], g.d[1]), dx = g.d[0] / dl, dy = g.d[1] / dl;
+    let tx, ty;                       // a felirat helye
+    if (r.net == null){
+      el("line", {x1:bx - dx*14, y1:by - dy*14, x2:bx + dx*30, y2:by + dy*30, stroke:muted, "stroke-width":2.5, "stroke-dasharray":"3 5", "stroke-linecap":"round"}, svg);
+      tx = bx + dx * 44; ty = by + dy * 44;
+    } else {
+      const f = Math.abs(r.net) / maxv, L = 34 + 70 * f, w = 3 + 11 * f, col = r.net >= 0 ? css("--imp") : css("--exp");
+      const s = r.net >= 0 ? -1 : 1;                    // import: a nyíl befelé (−dir), export: kifelé (+dir)
+      const hx = bx + s * dx * L / 2, hy = by + s * dy * L / 2, ax = bx - s * dx * L / 2, ay = by - s * dy * L / 2;
+      const hl = Math.min(L * .55, 12 + w * 1.1), hw = w * 1.15 + 5;
+      const ex = hx - s * dx * hl, ey = hy - s * dy * hl, nx = -dy, ny = dx;
+      el("line", {x1:ax, y1:ay, x2:ex, y2:ey, stroke:col, "stroke-width":w, "stroke-linecap":"butt"}, svg);
+      el("polygon", {points:[hx, hy, ex + nx*hw, ey + ny*hw, ex - nx*hw, ey - ny*hw].join(","), fill:col}, svg);
+      // felirat a nyíl hátsó (külső) végén túl
+      const out = r.net >= 0 ? [ax, ay] : [hx, hy];
+      tx = out[0] + dx * 16; ty = out[1] + dy * 16;
+    }
+    const anc = dx > .35 ? "start" : dx < -.35 ? "end" : "middle";
+    const ty2 = dy > .35 ? ty + fs * .9 : dy < -.35 ? ty - fs * .6 : ty;
+    const t1 = el("text", {x:tx, y:ty2 - 2, "text-anchor":anc, "font-size":fs, "font-weight":650, fill:ink, stroke:surf, "stroke-width":3, "paint-order":"stroke"}, svg); t1.textContent = r.b.name;
+    const t2 = el("text", {x:tx, y:ty2 + fs * 1.15, "text-anchor":anc, "font-size":fs * .95, fill:ink2, stroke:surf, "stroke-width":3, "paint-order":"stroke"}, svg);
+    t2.textContent = r.net == null ? "nincs adat" : signed(r.net) + " MW";
+  });
+  // középen: Magyarország és a nettó érték
+  const net = D.net_import_mw[i], [cx, cy] = PX(19.3, 47.25);
+  const c1 = el("text", {x:cx, y:cy - 4, "text-anchor":"middle", "font-size":fs * 1.15, "font-weight":700, fill:ink}, svg); c1.textContent = "Magyarország";
+  const c2 = el("text", {x:cx, y:cy + fs * 1.25, "text-anchor":"middle", "font-size":fs * 1.05, fill:ink2}, svg);
+  c2.textContent = "nettó " + (net >= 0 ? "import " : "export ") + nf0.format(Math.abs(net)) + " MW";
 }
 
 // ---------- nettó import grafikon
