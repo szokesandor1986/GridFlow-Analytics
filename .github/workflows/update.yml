@@ -41,7 +41,7 @@ jobs:
           mkdir -p dist
           python collector.py --out dist/data.json
           cp index.html muszaki.html europa.html demo-data.json demo-engineer.json demo-europe.json demo-history.json dist/
-          if [ -f history.json ]; then cp history.json dist/; fi.
+          if [ -f history.json ]; then cp history.json dist/; fi
 
       - uses: actions/upload-pages-artifact@v5
         with:
