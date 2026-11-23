@@ -23,6 +23,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -39,6 +40,9 @@ NEIGHBOURS = {
     "SI": "Szlovénia",
 }
 PRICE_ZONES = [HOME] + list(NEIGHBOURS)
+# Határonkénti nap előtti NTC csak a nem-Core határokon van (a Core-határokon flow-based kapacitás-kiosztás van,
+# ott nincs NTC, a lekérdezés felesleges és lassú). A magyar Core-határok: AT, SK, RO, HR, SI.
+NTC_BORDERS = ("RS", "UA")
 
 
 def with_retry(fn, tries=3, wait=4):
@@ -51,12 +55,63 @@ def with_retry(fn, tries=3, wait=4):
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status in (401, 403):
                 sys.exit(f"HTTP {status}: érvénytelen token vagy nincs RESTful API jogosultság.")
-            if exc.__class__.__name__ in ("NoMatchingDataError", "InvalidBusinessParameterError"):
+            if exc.__class__.__name__ in NO_DATA:
                 raise
             last = exc
             if attempt < tries:
                 time.sleep(wait * attempt)
     raise last
+
+
+NO_DATA = ("NoMatchingDataError", "InvalidBusinessParameterError", "InvalidPSRTypeError")
+
+
+class Batch:
+    """Lekérdezések párhuzamosan. A futásidőt az ENTSO-E válaszideje adja, nem a számolás,
+    ezért több kérés fut egyszerre (a limit 400 kérés/perc, mi összesen is csak ~100 kérést küldünk).
+    A kérések beadási sorrendje a fontossági sorrend; a határidő után a még nem indult kérések kimaradnak."""
+
+    def __init__(self, budget_s, workers=8, tries=2, wait=2):
+        self.deadline = time.monotonic() + budget_s
+        self.budget_s = budget_s
+        self.ex = ThreadPoolExecutor(max_workers=workers)
+        self.futs = {}
+        self.tries, self.wait = tries, wait
+        self.errors, self.missing, self.skipped = [], [], 0
+
+    def _run(self, fn):
+        if time.monotonic() > self.deadline:
+            return "skip", None
+        try:
+            v = with_retry(fn, tries=self.tries, wait=self.wait)
+        except Exception as exc:  # noqa: BLE001
+            name = exc.__class__.__name__
+            return ("nodata" if name in NO_DATA else "err:" + name), None
+        if v is None or (hasattr(v, "__len__") and len(v) == 0):
+            return "nodata", None
+        return "ok", v
+
+    def add(self, key, fn):
+        self.futs[key] = self.ex.submit(self._run, fn)
+
+    def get(self, key):
+        """Az eredmény (vagy None). A hiányt és a hibát feljegyzi. 401/403 esetén a SystemExit továbbmegy."""
+        st, v = self.futs[key].result()
+        if st == "ok":
+            return v
+        if st == "skip":
+            self.skipped += 1
+        elif st == "nodata":
+            self.missing.append(key)
+        else:
+            self.errors.append(f"{key}: {st[4:]}")
+        return None
+
+    def close(self):
+        self.ex.shutdown(wait=True)
+
+    def notes(self):
+        return [f"időkeret ({self.budget_s} s) lejárt, kihagyott lekérdezések: {self.skipped}"] if self.skipped else []
 
 
 def to_list(series):
@@ -72,22 +127,29 @@ def hourly_mean(s):
     return s.tz_convert("UTC").resample("h").mean()
 
 
-def collect(client, now=None, hours=48):
+def collect(client, now=None, hours=48, budget_s=240, workers=8):
     now = now or pd.Timestamp.now(tz="UTC")
     start = (now - pd.Timedelta(hours=hours)).floor("h")
     end = now.ceil("h") + pd.Timedelta(hours=1)
-    errors = []
+    B = Batch(budget_s, workers=workers)
+
+    # ---- kérések beadása (fontossági sorrendben), majd az eredmények összegyűjtése
+    local_midnight = now.tz_convert("Europe/Budapest").normalize()
+    p_start = local_midnight - pd.Timedelta(days=1)
+    p_end = local_midnight + pd.Timedelta(days=2)
+    for code in NEIGHBOURS:
+        for direction, a, b in (("import", code, HOME), ("export", HOME, code)):
+            B.add(f"áramlás {code} {direction}", lambda a=a, b=b: client.query_crossborder_flows(a, b, start=start, end=end))
+    for zone in PRICE_ZONES:
+        B.add(f"ár {zone}", lambda zone=zone: client.query_day_ahead_prices(zone, start=p_start, end=p_end))
 
     # ---- fizikai áramlás
     imp, exp = {}, {}
     for code, name in NEIGHBOURS.items():
-        for direction, store, a, b in (("import", imp, code, HOME), ("export", exp, HOME, code)):
-            try:
-                s = with_retry(lambda a=a, b=b: client.query_crossborder_flows(a, b, start=start, end=end))
-                if len(s):
-                    store[code] = hourly_mean(s)
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"áramlás {code} {direction}: {exc.__class__.__name__}")
+        for direction, store in (("import", imp), ("export", exp)):
+            s_ = B.get(f"áramlás {code} {direction}")
+            if s_ is not None:
+                store[code] = hourly_mean(s_)
 
     idx = pd.date_range(start, end, freq="h", tz="UTC", inclusive="left")
     imp_df = pd.DataFrame(imp).reindex(idx)
@@ -122,17 +184,13 @@ def collect(client, now=None, hours=48):
     last_complete = complete[complete].index.max() if complete.any() else None
 
     # ---- day-ahead árak
-    local_midnight = now.tz_convert("Europe/Budapest").normalize()
-    p_start = local_midnight - pd.Timedelta(days=1)
-    p_end = local_midnight + pd.Timedelta(days=2)
     prices = {}
     for zone in PRICE_ZONES:
-        try:
-            s = with_retry(lambda zone=zone: client.query_day_ahead_prices(zone, start=p_start, end=p_end))
-            if len(s):
-                prices[zone] = s.tz_convert("UTC")
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"ár {zone}: {exc.__class__.__name__}")
+        s_ = B.get(f"ár {zone}")
+        if s_ is not None:
+            prices[zone] = s_.tz_convert("UTC")
+    B.close()
+    errors = B.errors + B.notes()
 
     price_block = {"ts": [], "zones": {}}
     if prices:
@@ -178,26 +236,6 @@ TYPE_TO_GROUP = {t: g for g, ts in GROUPS.items() for t in ts}
 # a hulladék a biomassza értékét kapja. Mindkettő becslés, az oldalon is így szerepel.
 CO2_FACTORS = {"nuclear": 12, "gas": 490, "coal": 820, "solar": 48, "wind": 11, "bio": 230, "hydro": 24, "other": 700}
 CO2_SOURCE = "IPCC AR5 WG3 Annex III, életciklus-mediánok (gCO2eq/kWh); egyéb: 700, becslés"
-
-
-def attempt(ctx, key, fn):
-    """Egy lekérdezés hibatűrően: None-t ad vissza, és feljegyzi, mi hiányzik / mi romlott el.
-    Ha az időkeret lejárt, a hátralévő lekérdezések kimaradnak (a futás így nem lóghat el)."""
-    if time.monotonic() > ctx["deadline"]:
-        ctx["skipped"] += 1
-        return None
-    try:
-        v = with_retry(fn, tries=2, wait=3)
-        if v is None or (hasattr(v, "__len__") and len(v) == 0):
-            ctx["missing"].append(key)
-            return None
-        return v
-    except Exception as exc:  # noqa: BLE001
-        if exc.__class__.__name__ == "NoMatchingDataError":
-            ctx["missing"].append(key)
-        else:
-            ctx["errors"].append(f"{key}: {exc.__class__.__name__}")
-        return None
 
 
 def hourly_list(obj, idx):
@@ -322,14 +360,42 @@ def updown(df):
     return up, dn
 
 
-def collect_engineer(client, now=None, hours=48, main=None, budget_s=420):
+def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, workers=8):
     now = now or pd.Timestamp.now(tz="UTC")
     start = (now - pd.Timedelta(hours=hours)).floor("h")
     local = now.tz_convert("Europe/Budapest").normalize()
     end = (local + pd.DateOffset(days=2)).tz_convert("UTC")      # holnap 24:00 (helyi idő): az előrejelzések miatt
     idx = pd.date_range(start, end, freq="h", tz="UTC", inclusive="left")
-    ctx = {"errors": [], "missing": [], "skipped": 0, "deadline": time.monotonic() + budget_s}
-    A = lambda key, fn: attempt(ctx, key, fn)  # noqa: E731
+    B = Batch(budget_s, workers=workers)
+    ow_start, ow_end = now.floor("D") - pd.Timedelta(days=7), now.floor("D") + pd.Timedelta(days=45)
+    cap_start = pd.Timestamp(year=now.year - 1, month=1, day=1, tz="UTC")
+
+    # ---- kérések beadása, FONTOSSÁGI SORRENDBEN (ha az időkeret kifogy, a végén lévők maradnak ki):
+    # 1. fogyasztás, termelés, előrejelzés, rendszeregyensúly  2. határok menetrendje, kapacitása
+    # 3. blokkszintű termelés  4. kiesések (a leglassabbak)
+    B.add("fogyasztás tény", lambda: client.query_load(HOME, start=start, end=end))
+    B.add("fogyasztás előrejelzés", lambda: client.query_load_forecast(HOME, start=start, end=end))
+    B.add("termelés típusonként", lambda: client.query_generation(HOME, start=start, end=end, nett=True))
+    B.add("nap/szél előrejelzés", lambda: client.query_wind_and_solar_forecast(HOME, start=start, end=end))
+    B.add("eltérési ár", lambda: client.query_imbalance_prices(HOME, start=start, end=end))
+    B.add("eltérési mennyiség", lambda: client.query_imbalance_volumes(HOME, start=start, end=end))
+    for bt, tag in (("A96", "afrr"), ("A97", "mfrr")):
+        B.add(f"szabályozási energia {tag}", lambda bt=bt: client.query_activated_balancing_energy(HOME, start=start, end=end, business_type=bt))
+    B.add("beépített teljesítmény", lambda: client.query_installed_generation_capacity(HOME, start=cap_start, end=now))
+    for code in NEIGHBOURS:
+        for da in (False, True):
+            tag = " DA" if da else ""
+            B.add(f"menetrend {code}→HU{tag}", lambda code=code, da=da: client.query_scheduled_exchanges(code, HOME, start=start, end=end, dayahead=da))
+            B.add(f"menetrend HU→{code}{tag}", lambda code=code, da=da: client.query_scheduled_exchanges(HOME, code, start=start, end=end, dayahead=da))
+    for code in NTC_BORDERS:
+        B.add(f"NTC {code}→HU", lambda code=code: client.query_net_transfer_capacity_dayahead(code, HOME, start=start, end=end))
+        B.add(f"NTC HU→{code}", lambda code=code: client.query_net_transfer_capacity_dayahead(HOME, code, start=start, end=end))
+    B.add("blokkszintű termelés", lambda: client.query_generation_per_plant(HOME, start=start, end=end))
+    B.add("termelő-kiesések", lambda: client.query_unavailability_of_generation_units(HOME, start=ow_start, end=ow_end))
+    for code in NEIGHBOURS:
+        for a_, b_ in ((code, HOME), (HOME, code)):
+            B.add(f"hálózati kiesés {a_}→{b_}", lambda a_=a_, b_=b_: client.query_unavailability_transmission(a_, b_, start=ow_start, end=ow_end))
+    A = lambda key, fn=None: B.get(key)  # noqa: E731  (az eredmények kiolvasása; a lekérdezés már fut)
 
     # ---- határonként: fizikai vs menetrendezett, kapacitás
     flows = {}
@@ -338,12 +404,12 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=420):
         phys = physical_net_from_main(main, code, idx)
         f["phys_net"] = None if phys is None else to_list(phys)
         for field, da in (("sched_net", False), ("sched_da_net", True)):
-            i_ = A(f"menetrend {code}→HU{' DA' if da else ''}", lambda da=da: client.query_scheduled_exchanges(code, HOME, start=start, end=end, dayahead=da))
-            e_ = A(f"menetrend HU→{code}{' DA' if da else ''}", lambda da=da: client.query_scheduled_exchanges(HOME, code, start=start, end=end, dayahead=da))
+            i_ = A(f"menetrend {code}→HU{' DA' if da else ''}")
+            e_ = A(f"menetrend HU→{code}{' DA' if da else ''}")
             if i_ is not None or e_ is not None:
                 f[field] = to_list(net_of(i_, e_, idx))
-        ci = A(f"NTC {code}→HU", lambda: client.query_net_transfer_capacity_dayahead(code, HOME, start=start, end=end))
-        co = A(f"NTC HU→{code}", lambda: client.query_net_transfer_capacity_dayahead(HOME, code, start=start, end=end))
+        ci = A(f"NTC {code}→HU") if code in NTC_BORDERS else None
+        co = A(f"NTC HU→{code}") if code in NTC_BORDERS else None
         f["ntc_in"] = hourly_list(ci, idx)
         f["ntc_out"] = hourly_list(co, idx)
         if any(v is not None for v in f.values()):
@@ -434,8 +500,8 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=420):
             balancing[f"{tag}_up"] = None if up is None else hourly_list(up, idx)
             balancing[f"{tag}_down"] = None if dn is None else hourly_list(dn, idx)
 
-    if ctx["skipped"]:
-        ctx["errors"].append(f"időkeret ({budget_s} s) lejárt, kihagyott lekérdezések: {ctx['skipped']}")
+    B.close()
+    errors = B.errors + B.notes()
     have = lambda v: bool(v) and (not isinstance(v, dict) or any(x is not None for x in v.values()))  # noqa: E731
     modules = {
         "flows": bool(flows),
@@ -467,8 +533,8 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=420):
         "imbalance": imbalance,
         "balancing": balancing,
         "modules": modules,
-        "errors": ctx["errors"],
-        "missing": ctx["missing"],
+        "errors": errors,
+        "missing": B.missing,
     }
 
 
@@ -485,6 +551,8 @@ def main():
     p.add_argument("--engineer-out", default=None, help="alapértelmezés: engineer.json a --out mellett")
     p.add_argument("--skip-engineer", action="store_true", help="a mérnöki adatkörök kihagyása")
     p.add_argument("--hours", type=int, default=48, help="ennyi órára visszamenőleg kéri az adatokat")
+    p.add_argument("--workers", type=int, default=8, help="egyszerre ennyi ENTSO-E kérés fut")
+    p.add_argument("--budget", type=int, default=240, help="a fő és a mérnöki rész időkerete külön-külön, másodpercben")
     args = p.parse_args()
 
     token = os.environ.get("ENTSOE_TOKEN", "").strip()
@@ -493,8 +561,10 @@ def main():
 
     from entsoe import EntsoePandasClient
 
-    client = EntsoePandasClient(api_key=token)
-    data = collect(client, hours=args.hours)
+    # retry_delay: az alapértelmezett 60 s várakozás egy hibás kérés után percekre megállítaná a futást;
+    # timeout: egy elakadt kérés ne tartson fel mindent.
+    client = EntsoePandasClient(api_key=token, retry_count=2, retry_delay=5, timeout=45)
+    data = collect(client, hours=args.hours, budget_s=args.budget, workers=args.workers)
     if not any(b["last_ts"] for b in data["borders"]):
         sys.exit("Egyik határra sem érkezett áramlási adat; a data.json nem íródik felül.")
 
@@ -508,7 +578,7 @@ def main():
         return
     eng_out = args.engineer_out or os.path.join(os.path.dirname(os.path.abspath(args.out)), "engineer.json")
     try:
-        eng = collect_engineer(client, hours=args.hours, main=data)
+        eng = collect_engineer(client, hours=args.hours, main=data, budget_s=args.budget, workers=args.workers)
     except (Exception, SystemExit) as exc:  # a mérnöki rész hibája nem borítja a fő oldalt
         print(f"FIGYELEM: a mérnöki adatgyűjtés meghiúsult ({exc.__class__.__name__}: {exc}); az engineer.json nem íródik felül.")
         return
