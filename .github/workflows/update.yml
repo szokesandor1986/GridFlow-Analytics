@@ -1,5 +1,7 @@
 name: Adatfrissítés és közzététel
 
+# Az ENTSO-E adatai óránként frissülnek, ezért 20 percenként futtatni bőven elég.
+# A GitHub az ütemezett futásokat késleltetheti; ez normális.
 on:
   schedule:
     - cron: "7,27,47 * * * *"
@@ -12,6 +14,7 @@ permissions:
   pages: write
   id-token: write
 
+# Egyszerre csak egy közzététel fusson; a félbehagyott futást nem szakítjuk meg.
 concurrency:
   group: pages
   cancel-in-progress: false
@@ -41,7 +44,7 @@ jobs:
           mkdir -p dist
           python collector.py --out dist/data.json
           cp index.html muszaki.html europa.html demo-data.json demo-engineer.json demo-europe.json demo-history.json dist/
-          if [ -f history.json ]; then cp history.json dist/; fi
+          cp history.json dist/ 2>/dev/null || true
 
       - uses: actions/upload-pages-artifact@v5
         with:
