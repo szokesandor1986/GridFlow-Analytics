@@ -149,6 +149,29 @@ def test_budget():
     print("4. időkeret rendben")
 
 
+def test_parallel():
+    """Lassú ENTSO-E mellett a párhuzamos lekérdezés a sorosnál sokkal gyorsabb, és az eredmény ugyanaz."""
+    import time as _t
+
+    class Slow(FakeClient):
+        pass
+    for name in [n for n in dir(FakeClient) if n.startswith("query_")]:
+        def make(n):
+            def f(self, *a, **k):
+                _t.sleep(0.05)
+                return getattr(FakeClient, n)(self, *a, **k)
+            return f
+        setattr(Slow, name, make(name))
+    t0 = _t.monotonic()
+    e = col.collect_engineer(Slow(NOW), now=NOW, main=None, budget_s=60, workers=8)
+    dt = _t.monotonic() - t0
+    ref = col.collect_engineer(FakeClient(NOW), now=NOW, main=None, budget_s=60, workers=1)
+    assert json.dumps(e["load"]) == json.dumps(ref["load"]) and e["modules"] == ref["modules"]
+    # sorosan ~70 kérés x 0,05 s = 3,5 s lenne
+    assert dt < 2.0, dt
+    print(f"5. párhuzamosság rendben ({dt:.2f} s)")
+
+
 if __name__ == "__main__":
     # a with_retry várakozását kikapcsoljuk, hogy a hibatesztek ne lassúak legyenek
     col.time.sleep = lambda s: None
@@ -156,4 +179,5 @@ if __name__ == "__main__":
     test_engineer()
     test_survives_broken_client()
     test_budget()
+    test_parallel()
     print("MINDEN TESZT ÁTMENT")
