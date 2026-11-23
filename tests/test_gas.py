@@ -79,4 +79,10 @@ out5 = run(FakeHttp(TODAY, fail_agsi_country=("AT",)))
 assert "AT" not in out5["agsi"]["series"] and "HU" in out5["agsi"]["series"]
 print("7 OK  egy ország hibája nem visz el mindent")
 
+# 8. tartalék felderítés: ha az operatorpointdirections nem elérhető, az interconnections is elég
+out6 = run(FakeHttp(TODAY, no_opd=True))
+assert out6["flows"] and len(out6["flows"]["points"]) == 6
+assert not any("Belső" in p["label"] for p in out["flows"]["points"])   # belső (nem határ) pont kimarad
+print("8 OK  tartalék felderítés")
+
 print("MINDEN TESZT ÁTMENT")

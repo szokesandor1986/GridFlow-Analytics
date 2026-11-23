@@ -81,9 +81,10 @@ def winter(d):
 
 
 class FakeHttp:
-    def __init__(self, today, key="demo", fail_entsog=False, fail_agsi_country=()):
+    def __init__(self, today, key="demo", fail_entsog=False, fail_agsi_country=(), no_opd=False):
         self.today, self.key = today, key
         self.fail_entsog, self.fail_agsi_country = fail_entsog, set(fail_agsi_country)
+        self.no_opd = no_opd
         self.calls = []
 
     def get(self, url, params=None, headers=None, timeout=60):
@@ -91,6 +92,10 @@ class FakeHttp:
         self.calls.append((url, dict(params)))
         if "agsi" in url:
             return self._agsi(params, headers or {})
+        if "operatorpointdirections" in url:
+            if self.no_opd:
+                raise RuntimeError("HTTP 500")
+            return self._opd()
         if "interconnections" in url:
             return self._inter()
         return self._flows(params)
@@ -115,6 +120,17 @@ class FakeHttp:
                 "gas_day": b.isoformat(), "data": [agsi_record(code, d, self.today) for d in chunk]}
 
     # ---- ENTSOG
+    def _opd(self):
+        recs = []
+        for key, label, nb, side, *_ in POINTS:
+            recs.append({"operatorKey": "HU-TSO-0001", "pointKey": key, "pointLabel": label, "directionKey": side,
+                         "tSOCountry": "HU", "adjacentCountry": nb})
+            recs.append({"operatorKey": f"{nb}-TSO-DEMO", "pointKey": key, "pointLabel": label,
+                         "directionKey": "exit" if side == "entry" else "entry", "tSOCountry": nb, "adjacentCountry": "HU"})
+        recs.append({"operatorKey": "HU-TSO-0001", "pointKey": "DEMO-UGS", "pointLabel": "Belső tároló", "directionKey": "entry",
+                     "tSOCountry": "HU", "adjacentCountry": ""})
+        return {"operatorpointdirections": recs}
+
     def _inter(self):
         recs = []
         for key, label, nb, side, *_ in POINTS:
