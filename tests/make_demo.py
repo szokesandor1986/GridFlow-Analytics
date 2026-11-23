@@ -32,5 +32,21 @@ eng["demo"] = True
 eng["source"] = "DEMO – szintetikus adat, nem valós mérés"
 col.write_json(str(ROOT / "demo-engineer.json"), eng)
 
+eu = col.collect_europe(client, now=NOW)
+eu["demo"] = True
+eu["source"] = "DEMO – szintetikus adat, nem valós mérés"
+col.write_json(str(ROOT / "demo-europe.json"), eu)
+
+sys.modules["collector"] = col
+hspec = importlib.util.spec_from_file_location("history", ROOT / "history.py")
+hist = importlib.util.module_from_spec(hspec)
+hspec.loader.exec_module(hist)
+from fake_history_client import FakeHistoryClient  # noqa: E402
+h = hist.collect_history(FakeHistoryClient(NOW), now=NOW, from_year=2019, workers=8)
+h["demo"] = True
+h["source"] = "DEMO – szintetikus adat, nem valós mérés"
+col.write_json(str(ROOT / "demo-history.json"), h)
+print("europe zónák:", sorted(eu["zones"]), "| history hónapok:", len(h["months"]))
+
 print("ok | utolsó teljes óra:", main["last_complete_ts"], "| fő hibák:", main["errors"], "| mérnöki hibák:", eng["errors"])
 print("modulok:", {k: v for k, v in eng["modules"].items()})

@@ -172,6 +172,15 @@ def test_parallel():
     print(f"5. párhuzamosság rendben ({dt:.2f} s)")
 
 
+def test_europe():
+    """Európai ár-pillanatkép (europe.json)."""
+    eu = col.collect_europe(FakeClient(NOW), now=NOW, budget_s=60)
+    assert "HU" in eu["zones"] and "DE_LU" in eu["zones"] and "RS" not in eu["zones"], sorted(eu["zones"])
+    assert len(eu["ts"]) >= 24 * 3 and all(len(v) == len(eu["ts"]) for v in eu["zones"].values())
+    json.dumps(eu, allow_nan=False)
+    print(f"6. európai ár-pillanatkép rendben ({len(eu['zones'])} zóna)")
+
+
 if __name__ == "__main__":
     # a with_retry várakozását kikapcsoljuk, hogy a hibatesztek ne lassúak legyenek
     col.time.sleep = lambda s: None
@@ -180,4 +189,5 @@ if __name__ == "__main__":
     test_survives_broken_client()
     test_budget()
     test_parallel()
+    test_europe()
     print("MINDEN TESZT ÁTMENT")
