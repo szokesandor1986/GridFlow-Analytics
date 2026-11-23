@@ -222,13 +222,49 @@ def entsog_list(js):
     return []
 
 
-def discover_points(http, errors):
-    """A magyar határpontok és irányaik a /interconnections végpontról.
-    Visszatér: [{"id","label","country","side":"entry|exit","op","point"}] ; side a magyar üzemeltető oldala."""
+def _first(r, names):
+    for n in names:
+        v = r.get(n)
+        if v not in (None, ""):
+            return str(v)
+    return ""
+
+
+def discover_from_opd(http, errors):
+    """Elsődleges út: /operatorpointdirections?hasData=1 (a kézikönyv szerint innen kell venni a pointDirection értékeit).
+    A magyar üzemeltető (HU-...) pontjai, amelyeknek a szomszédos oldala másik ország."""
+    try:
+        js = http.get(f"{ENTSOG_BASE}/operatorpointdirections", params={"hasData": 1, "limit": -1}, timeout=90)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"ENTSOG operatorpointdirections: {exc.__class__.__name__} {exc}")
+        return []
+    pts, seen, hu_rows, fields = [], set(), 0, set()
+    for r in entsog_list(js):
+        op = str(r.get("operatorKey") or "")
+        if not op.startswith("HU"):
+            continue
+        hu_rows += 1
+        fields |= set(r)
+        pk = r.get("pointKey")
+        side = str(r.get("directionKey") or "").lower()
+        nb = _first(r, ("adjacentCountry", "adjacentCountryKey", "adjacentCountryLabel", "connectedCountry")).upper()[:2]
+        if not pk or side not in ("entry", "exit") or not nb or nb == "HU":
+            continue
+        if (op, pk, side) in seen:
+            continue
+        seen.add((op, pk, side))
+        pts.append({"id": f"{pk}|{side}", "label": r.get("pointLabel") or pk, "country": nb, "side": side, "op": op, "point": pk})
+    if hu_rows and not pts:
+        errors.append("ENTSOG operatorpointdirections: van magyar rekord, de nincs szomszéd-ország mező; mezők: " + ", ".join(sorted(fields)))
+    return pts
+
+
+def discover_from_interconnections(http, errors):
+    """Tartalék út: /interconnections (a from/to ország- és üzemeltetőkulcs mezőkre épül)."""
     try:
         js = http.get(f"{ENTSOG_BASE}/interconnections", params={"limit": -1}, timeout=90)
     except Exception as exc:  # noqa: BLE001
-        errors.append(f"ENTSOG pontfelderítés: {exc.__class__.__name__} {exc}")
+        errors.append(f"ENTSOG interconnections: {exc.__class__.__name__} {exc}")
         return []
     pts, seen = [], set()
     for r in entsog_list(js):
@@ -245,8 +281,15 @@ def discover_points(http, errors):
         seen.add((op, pk, side))
         pts.append({"id": f"{pk}|{side}", "label": r.get("pointLabel") or pk, "country": nb, "side": side,
                     "op": op, "point": pk})
+    return pts
+
+
+def discover_points(http, errors):
+    """A magyar határpontok és irányaik: [{"id","label","country","side":"entry|exit","op","point"}];
+    a side a magyar üzemeltető oldala. Futáskor derítjük fel, nincs bedrótozott kulcslista."""
+    pts = discover_from_opd(http, errors) or discover_from_interconnections(http, errors)
     if not pts:
-        errors.append("ENTSOG pontfelderítés: nem találtam magyar határpontot a válaszban")
+        errors.append("ENTSOG pontfelderítés: nem találtam magyar határpontot")
     return pts
 
 
@@ -270,7 +313,7 @@ def collect_flows(http, days=400, today=None, budget_s=300, workers=4):
             return "skip", []
         pd_ = ",".join(f"{p['op']}{p['point']}{p['side']}" for p in chunk)
         params = {"indicator": "Physical Flow", "periodType": "day", "pointDirection": pd_,
-                  "from": win[0].isoformat(), "to": win[1].isoformat(), "limit": -1, "timezone": "CET"}
+                  "from": win[0].isoformat(), "to": win[1].isoformat(), "limit": -1, "timeZone": "CET", "timezone": "CET"}
         last = None
         for attempt in (1, 2):
             try:
