@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Határkeresztező villamosenergia-áramlás – Magyarország</title>
+<link rel="icon" href="data:,">
+<meta name="description" content="A magyar villamosenergia-rendszer határkeresztező fizikai áramlása és a day-ahead zónaárak az ENTSO-E adatai alapján.">
+<style>
+:root{
+  color-scheme: light dark;
+  --page:#f9f9f7; --surface:#fcfcfb; --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --grid:#e1e0d9; --neutral:#f0efec;
+  --imp:#2a78d6; --exp:#e34948;
+  --z-AT:#eb6834; --z-SK:#1baf7a; --z-RO:#eda100; --z-HR:#e87ba4; --z-SI:#008300; --z-RS:#6250d6; --z-UA:#e34948;
+  --warn-bg:#fff4d6; --warn-ink:#5a4200; --demo-bg:#e34948; --demo-ink:#fff;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --page:#0d0d0d; --surface:#1a1a19; --ink:#f0efec; --ink2:#c3c2b7; --muted:#898781; --grid:#2c2c2a; --neutral:#383835;
+    --imp:#3987e5; --exp:#e66767;
+    --z-AT:#d95926; --z-SK:#199e70; --z-RO:#c98500; --z-HR:#d55181; --z-SI:#0ca30c; --z-RS:#9085e9; --z-UA:#e66767;
+    --warn-bg:#3a2f0a; --warn-ink:#f3d98a; --demo-bg:#e66767; --demo-ink:#0d0d0d;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--page);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.num{font-variant-numeric:tabular-nums}
+main{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
+header h1{font-size:clamp(22px,3.4vw,30px);line-height:1.2;margin:0 0 6px;letter-spacing:-.01em}
+header p.sub{margin:0;color:var(--ink2);max-width:70ch}
+.meta{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;color:var(--muted);font-size:13px}
+.banner{margin:0 0 16px;padding:10px 14px;border-radius:10px;font-weight:600}
+.banner.demo{background:var(--demo-bg);color:var(--demo-ink);text-align:center;letter-spacing:.02em}
+.banner.warn{background:var(--warn-bg);color:var(--warn-ink);font-weight:500}
+.card{background:var(--surface);border:1px solid var(--grid);border-radius:14px;padding:18px;margin-top:16px}
+.card h2{font-size:17px;margin:0 0 4px}
+.card .hint{margin:0 0 14px;color:var(--ink2);font-size:14px}
+.hero{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:18px 28px;align-items:center}
+@media (max-width:760px){.hero{grid-template-columns:1fr}}
+.hero .label{color:var(--ink2);font-size:14px}
+.hero .big{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 12px;margin:2px 0}
+.hero .big .v{font-size:clamp(46px,9vw,76px);font-weight:700;line-height:1;letter-spacing:-.02em}
+.hero .big .u{font-size:22px;color:var(--ink2);font-weight:600}
+.tag{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:15px}
+.tag i{display:inline-block;width:12px;height:12px;border-radius:3px}
+.hero .when{color:var(--ink2);font-size:14px}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.stat{border-left:3px solid var(--grid);padding:2px 0 2px 10px}
+.stat .k{color:var(--ink2);font-size:12.5px}
+.stat .n{font-size:22px;font-weight:650;line-height:1.2;white-space:nowrap}
+.stat .n small{font-size:13px;color:var(--ink2);font-weight:600}
+@media (max-width:520px){
+  .stats{grid-template-columns:1fr;gap:8px}
+  .stat{display:grid;grid-template-columns:1fr auto;column-gap:10px;align-items:baseline}
+  .stat .s{grid-column:1/-1}
+}
+.stat .s{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:14.5px}
+th{font-weight:600;color:var(--ink2);text-align:left;font-size:12.5px;padding:0 8px 8px;border-bottom:1px solid var(--grid);white-space:nowrap}
+td{padding:9px 8px;border-bottom:1px solid var(--grid);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+th.r,td.r{text-align:right}
+td.nm{font-weight:600;white-space:nowrap}
+td.nm small{color:var(--muted);font-weight:500;margin-left:4px}
+.barcell{min-width:150px;width:36%}
+.bar{position:relative;height:18px}
+.bar::before{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--muted);opacity:.7}
+.bar b{position:absolute;top:2px;bottom:2px;border-radius:3px}
+.bar b.imp{right:50%;background:var(--imp)}
+.bar b.exp{left:50%;background:var(--exp)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.nodata{color:var(--muted);white-space:nowrap}
+@media (max-width:640px){.hide-sm{display:none}.barcell{min-width:110px}}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 10px;color:var(--ink2);font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px}
+.chart{position:relative;width:100%}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.tip{position:absolute;pointer-events:none;background:var(--surface);color:var(--ink);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;font-size:13px;line-height:1.35;box-shadow:0 4px 18px rgba(0,0,0,.16);z-index:3;display:none;min-width:150px}
+.tip .t{font-weight:650;margin-bottom:3px}
+.tip .row{display:flex;align-items:center;gap:7px;justify-content:space-between}
+.tip .row span:first-child{display:inline-flex;align-items:center;gap:6px}
+.tip i{display:inline-block;width:10px;height:10px;border-radius:3px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
+.chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--grid);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 12px;font:inherit;font-size:13.5px;cursor:pointer}
+.chip i{display:inline-block;width:11px;height:11px;border-radius:3px}
+.chip[aria-pressed="true"]{border-color:var(--ink2);font-weight:600}
+.chip[aria-pressed="false"]{color:var(--ink2)}
+.chip[aria-pressed="false"] i{opacity:.35}
+.chip:disabled{cursor:default}
+.chip:focus-visible{outline:2px solid var(--imp);outline-offset:2px}
+footer{margin-top:22px;color:var(--ink2);font-size:13px}
+footer p{margin:0 0 8px;max-width:90ch}
+.err{padding:18px;color:var(--ink2)}
+text{font-family:inherit}
+</style>
+</head>
+<body>
+<main>
+  <div id="banners"></div>
+  <header>
+    <h1>Határkeresztező villamosenergia-áramlás</h1>
+    <p class="sub">Mennyi villamos energia áramlik be Magyarországra és ki onnan a szomszédos rendszerirányítók mérései szerint, és mennyi a day-ahead zónaár.</p>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="card" id="heroCard" aria-live="polite"></section>
+
+  <section class="card">
+    <h2>Határonkénti áramlás</h2>
+    <p class="hint">A nettó érték pozitív importnál, negatív exportnál. Az árak a jelenlegi day-ahead piaci időegységre vonatkoznak.</p>
+    <div class="legend"><span><i style="background:var(--imp)"></i>Import (a szomszédból ide)</span><span><i style="background:var(--exp)"></i>Export (innen a szomszédba)</span></div>
+    <div id="bordersWrap"></div>
+  </section>
+
+  <section class="card">
+    <h2>Nettó import az elmúlt 48 órában</h2>
+    <p class="hint">Órás átlag, MW. A körvonalas oszlop a fő szám órája, a halvány oszlopokból még hiányzik legalább egy határ adata.</p>
+    <div class="legend"><span><i style="background:var(--imp)"></i>Nettó import</span><span><i style="background:var(--exp)"></i>Nettó export</span></div>
+    <div class="chart" id="netChart" role="img" aria-label="Nettó import az elmúlt 48 órában, óránként"></div>
+  </section>
+
+  <section class="card">
+    <h2>Day-ahead zónaárak</h2>
+    <p class="hint">€/MWh. A Magyarország vonal mindig látszik, a szomszédos zónák ki- és bekapcsolhatók.</p>
+    <div class="chips" id="chips"></div>
+    <div class="chart" id="priceChart" role="img" aria-label="Day-ahead zónaárak, Magyarország és a szomszédos zónák"></div>
+  </section>
+
+  <footer id="foot"></footer>
+</main>
+
+<script>
+"use strict";
+const TZ = "Europe/Budapest";
+const NAMES = {HU:"Magyarország",AT:"Ausztria",SK:"Szlovákia",UA:"Ukrajna",RO:"Románia",RS:"Szerbia",HR:"Horvátország",SI:"Szlovénia"};
+const mkNum = (o) => { const f = new Intl.NumberFormat("hu-HU", o); return {format: v => f.format(v).replace(/^-/, "\u2212")}; };
+const nf0 = mkNum({maximumFractionDigits:0});
+const nf1 = mkNum({minimumFractionDigits:1,maximumFractionDigits:1});
+const fTime = new Intl.DateTimeFormat("hu-HU",{timeZone:TZ,hour:"2-digit",minute:"2-digit",hour12:false});
+const fDate = new Intl.DateTimeFormat("hu-HU",{timeZone:TZ,month:"short",day:"numeric"});
+const fFull = new Intl.DateTimeFormat("hu-HU",{timeZone:TZ,year:"numeric",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false});
+const fWeek = new Intl.DateTimeFormat("hu-HU",{timeZone:TZ,weekday:"long"});
+const fParts = new Intl.DateTimeFormat("en-GB",{timeZone:TZ,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",hour12:false});
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in (attrs||{})) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function signed(v, f){ f = f || nf0; return (v > 0 ? "+" : v < 0 ? "−" : "") + f.format(Math.abs(v)); }
+function localParts(d){ const p = fParts.formatToParts(d), o = {}; p.forEach(x => o[x.type] = x.value); return {y:+o.year,m:+o.month,d:+o.day,h:(+o.hour)%24}; }
+function localDayKey(d){ const p = localParts(d); return p.y*10000 + p.m*100 + p.d; }
+function zoneColor(z){ return z === "HU" ? css("--ink") : css("--z-" + z) || css("--muted"); }
+function nice(min, max, n){
+  if (min === max){ max = min + 1; }
+  const span = max - min, raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1,2,2.5,5,10].map(m => m*mag).find(s => s >= raw) || 10*mag;
+  const lo = Math.floor(min/step)*step, hi = Math.ceil(max/step)*step, t = [];
+  for (let v = lo; v <= hi + step/2; v += step) t.push(Math.round(v/step*1e6)/1e6*step);
+  return {lo, hi, ticks:t};
+}
+
+let D = null, M = null, NOW = new Date(), selected = new Set(["AT","SK"]);
+
+async function load(){
+  const demo = new URLSearchParams(location.search).get("demo");
+  const url = (demo ? "demo-data.json" : "data.json") + "?t=" + Date.now();
+  try{
+    const r = await fetch(url, {cache:"no-store"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    D = await r.json();
+  }catch(e){
+    $("heroCard").innerHTML = '<div class="err"><b>Az adat nem tölthető be.</b> (' + esc(e.message) + ')<br>Ha a fájlt közvetlenül a gépedről nyitottad meg, indíts egy helyi szervert a mappában: <code>python3 -m http.server</code>, majd nyisd meg a <code>http://localhost:8000</code> címet.</div>';
+    return;
+  }
+  NOW = D.demo ? new Date(D.generated_utc) : new Date();
+  model();
+  render();
+  let t; addEventListener("resize", () => { clearTimeout(t); t = setTimeout(renderCharts, 120); });
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+}
+
+// ---------- modell
+function model(){
+  const T = D.hourly_ts.map(s => new Date(s));
+  const n = T.length;
+  const imp = new Array(n).fill(0), exp = new Array(n).fill(0), cnt = new Array(n).fill(0);
+  D.borders.forEach(b => b.import_mw.forEach((v,i) => {
+    const e = b.export_mw[i];
+    if (v != null) imp[i] += v;
+    if (e != null) exp[i] += e;
+    if (v != null || e != null) cnt[i]++;
+  }));
+  const lastIdx = D.last_complete_ts ? D.hourly_ts.indexOf(D.last_complete_ts) : -1;
+  const P = D.prices, pts = P.ts.map(s => new Date(s));
+  const step = pts.length > 1 ? pts[1] - pts[0] : 3600e3;
+  let pIdx = -1; pts.forEach((t,i) => { if (t <= NOW) pIdx = i; });
+  M = {T, imp, exp, cnt, lastIdx, pts, step, pIdx};
+}
+
+// ---------- megjelenítés
+function render(){
+  banners(); meta(); hero(); borders(); chips(); renderCharts(); foot();
+}
+function renderCharts(){ netChart(); priceChart(); }
+
+function banners(){
+  const b = [];
+  if (D.demo) b.push('<div class="banner demo">DEMO ADAT – szintetikus, nem valós mérés. Csak az oldal kinézetének előnézete.</div>');
+  else {
+    const age = (NOW - new Date(D.generated_utc)) / 36e5;
+    if (age > 3) b.push('<div class="banner warn">Figyelem: az adatgyűjtés utoljára ' + nf0.format(age) + ' órája futott le, az adatok elavultak lehetnek.</div>');
+  }
+  $("banners").innerHTML = b.join("");
+}
+function meta(){
+  const g = new Date(D.generated_utc);
+  $("meta").innerHTML = '<span>Adatgyűjtés: ' + fFull.format(g) + ' (helyi idő)</span><span>Forrás: ' + esc(D.source) + '</span>';
+}
+
+function hero(){
+  const c = $("heroCard");
+  if (M.lastIdx < 0){ c.innerHTML = '<div class="err">Nincs elég áramlási adat a fő szám kiszámításához.</div>'; return; }
+  const i = M.lastIdx, net = D.net_import_mw[i], isImp = net >= 0;
+  const t0 = M.T[i], t1 = new Date(t0.getTime() + 3600e3);
+  const hu = (D.prices.zones.HU || [])[M.pIdx];
+  const col = isImp ? "var(--imp)" : "var(--exp)";
+  c.innerHTML =
+    '<div class="hero"><div>' +
+      '<div class="label">Nettó import / export (órás átlag)</div>' +
+      '<div class="big"><span class="v num">' + nf0.format(Math.abs(net)) + '</span><span class="u">MW</span>' +
+      '<span class="tag"><i style="background:' + col + '"></i>' + (isImp ? "nettó import" : "nettó export") + '</span></div>' +
+      '<div class="when">' + fDate.format(t0) + ' ' + fTime.format(t0) + '–' + fTime.format(t1) + ' (helyi idő) · a legutóbbi óra, amelyre minden határ adata megvan</div>' +
+    '</div><div class="stats">' +
+      stat("Import összesen", nf0.format(M.imp[i]) + " <small>MW</small>", "a szomszédokból") +
+      stat("Export összesen", nf0.format(M.exp[i]) + " <small>MW</small>", "a szomszédokba") +
+      stat("Day-ahead ár (HU)", hu == null ? "–" : nf1.format(hu) + " <small>€/MWh</small>", M.pIdx >= 0 ? fTime.format(M.pts[M.pIdx]) + "–" + fTime.format(new Date(M.pts[M.pIdx].getTime() + M.step)) : "") +
+    '</div></div>';
+}
+function stat(k, n, s){ return '<div class="stat"><div class="k">' + k + '</div><div class="n num">' + n + '</div><div class="s">' + s + '</div></div>'; }
+
+function borders(){
+  const i = M.lastIdx;
+  const rows = D.borders.map(b => {
+    const imp = i >= 0 ? b.import_mw[i] : null, exp = i >= 0 ? b.export_mw[i] : null;
+    const has = imp != null || exp != null;
+    const net = has ? (imp || 0) - (exp || 0) : null;
+    const zp = D.prices.zones[b.code], hp = D.prices.zones.HU;
+    const price = (zp && M.pIdx >= 0) ? zp[M.pIdx] : null;
+    const spread = (price != null && hp && hp[M.pIdx] != null) ? price - hp[M.pIdx] : null;
+    return {b, net, price, spread, last: b.last_ts ? new Date(b.last_ts) : null};
+  }).sort((a,z) => (z.net == null ? -1 : Math.abs(z.net)) - (a.net == null ? -1 : Math.abs(a.net)));
+  const max = Math.max(100, ...rows.map(r => r.net == null ? 0 : Math.abs(r.net)));
+  let h = '<table><thead><tr><th>Határ</th><th class="barcell"><span class="sr">Irány és nagyság</span></th><th class="r">Nettó, MW</th><th class="r hide-sm">Ár, €/MWh</th><th class="r hide-sm">Különbség HU-hoz</th><th class="r hide-sm">Utolsó óra</th></tr></thead><tbody>';
+  rows.forEach(r => {
+    const nm = '<td class="nm">' + esc(r.b.name) + '<small>' + r.b.code + '</small></td>';
+    if (r.net == null){
+      h += '<tr>' + nm + '<td class="barcell nodata" colspan="5">nincs adat</td></tr>'; return;
+    }
+    const w = Math.abs(r.net) / max * 50;
+    const seg = r.net >= 0 ? '<b class="imp" style="width:' + w + '%"></b>' : '<b class="exp" style="width:' + w + '%"></b>';
+    h += '<tr>' + nm + '<td class="barcell"><div class="bar" aria-hidden="true">' + seg + '</div></td>' +
+      '<td class="r num"><b>' + signed(r.net) + '</b></td>' +
+      '<td class="r num hide-sm">' + (r.price == null ? "–" : nf1.format(r.price)) + '</td>' +
+      '<td class="r num hide-sm">' + (r.spread == null ? "–" : signed(r.spread, nf1)) + '</td>' +
+      '<td class="r num hide-sm">' + (r.last ? fTime.format(r.last) + "–" + fTime.format(new Date(r.last.getTime() + 3600e3)) : "–") + '</td></tr>';
+  });
+  $("bordersWrap").innerHTML = h + '</tbody></table>';
+}
+
+function chips(){
+  const zones = Object.keys(D.prices.zones).filter(z => z !== "HU");
+  const box = $("chips"); box.innerHTML = "";
+  const mk = (z, locked) => {
+    const b = document.createElement("button");
+    b.className = "chip"; b.type = "button";
+    b.setAttribute("aria-pressed", locked || selected.has(z) ? "true" : "false");
+    b.innerHTML = '<i style="background:' + zoneColor(z) + '"></i>' + esc(NAMES[z] || z);
+    if (locked) b.disabled = true;
+    else b.onclick = () => { selected.has(z) ? selected.delete(z) : selected.add(z); chips(); priceChart(); };
+    box.appendChild(b);
+  };
+  if (D.prices.zones.HU) mk("HU", true);
+  zones.forEach(z => mk(z, false));
+}
+
+// ---------- nettó import grafikon
+function netChart(){
+  const host = $("netChart"); host.innerHTML = "";
+  const W = Math.max(320, host.clientWidth), H = W < 520 ? 250 : 300;
+  const m = {l:54, r:10, t:22, b:36};
+  const narrow = W < 520, lstep = narrow ? 12 : 6;
+  const vals = D.net_import_mw, n = vals.length;
+  const finite = vals.filter(v => v != null);
+  if (!finite.length){ host.innerHTML = '<div class="err">Nincs adat.</div>'; return; }
+  const ny = nice(Math.min(0, ...finite), Math.max(0, ...finite), 5);
+  const x0 = m.l, x1 = W - m.r, y0 = H - m.b, y1 = m.t;
+  const band = (x1 - x0) / n, bw = Math.max(2, band * 0.72);
+  const Y = v => y0 - (v - ny.lo) / (ny.hi - ny.lo) * (y0 - y1);
+  const svg = el("svg", {viewBox:"0 0 " + W + " " + H, width:W, height:H}, host);
+  const ink2 = css("--ink2"), grid = css("--grid"), muted = css("--muted");
+  ny.ticks.forEach(t => {
+    el("line", {x1:x0, x2:x1, y1:Y(t), y2:Y(t), stroke: t === 0 ? muted : grid, "stroke-width": t === 0 ? 1.2 : 1}, svg);
+    const tx = el("text", {x:x0 - 8, y:Y(t) + 4, "text-anchor":"end", "font-size":12, fill:ink2}, svg); tx.textContent = nf0.format(t);
+  });
+  const unit = el("text", {x:x0 - 8, y:y1 - 10, "text-anchor":"end", "font-size":11, fill:muted}, svg); unit.textContent = "MW";
+  M.T.forEach((t,i) => {
+    const v = vals[i]; if (v == null) return;
+    const cx = x0 + band * (i + .5), top = Math.min(Y(v), Y(0)), hh = Math.max(1, Math.abs(Y(v) - Y(0)));
+    el("rect", {x:cx - bw/2, y:top, width:bw, height:hh, rx:Math.min(3, bw/3), fill: v >= 0 ? css("--imp") : css("--exp"), opacity: D.complete[i] ? 1 : .38,
+      stroke: i === M.lastIdx ? css("--ink") : "none", "stroke-width": 2}, svg);
+    const p = localParts(t);
+    if (p.h % lstep === 0){
+      const lab = el("text", {x:cx, y:y0 + 17, "text-anchor":"middle", "font-size":narrow ? 11 : 12, fill:ink2}, svg);
+      lab.textContent = p.h === 0 ? fDate.format(t) : String(p.h).padStart(2,"0") + ":00";
+      if (p.h === 0) lab.setAttribute("font-weight", 650);
+      el("line", {x1:cx, x2:cx, y1:y0, y2:y0 + 4, stroke:muted}, svg);
+    }
+  });
+  hover(host, svg, W, H, x0, x1, n, i => {
+    const v = vals[i]; if (v == null) return null;
+    const t = M.T[i], t1 = new Date(t.getTime() + 3600e3);
+    return {x:x0 + band * (i + .5), html:
+      '<div class="t">' + fDate.format(t) + ' ' + fTime.format(t) + '–' + fTime.format(t1) + '</div>' +
+      row(v >= 0 ? css("--imp") : css("--exp"), v >= 0 ? "Nettó import" : "Nettó export", nf0.format(Math.abs(v)) + " MW") +
+      row(css("--imp"), "Import összesen", nf0.format(M.imp[i]) + " MW") +
+      row(css("--exp"), "Export összesen", nf0.format(M.exp[i]) + " MW") +
+      (D.complete[i] ? "" : '<div style="color:var(--muted);margin-top:3px">Nem teljes óra: ' + M.cnt[i] + " határ adata van</div>")};
+  });
+}
+function row(color, k, v){ return '<div class="row"><span><i style="background:' + color + '"></i>' + k + '</span><b class="num">' + v + '</b></div>'; }
+
+// közös hover: függőleges vezetővonal + súgó
+function hover(host, svg, W, H, x0, x1, n, info){
+  const tip = document.createElement("div"); tip.className = "tip"; host.appendChild(tip);
+  const guide = el("line", {y1:12, y2:H - 36, stroke:css("--ink2"), "stroke-width":1, "stroke-dasharray":"3 3", visibility:"hidden"}, svg);
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) / r.width * W;
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px - x0) / (x1 - x0) * n)));
+    const d = info(i);
+    if (!d){ tip.style.display = "none"; guide.setAttribute("visibility","hidden"); return; }
+    guide.setAttribute("x1", d.x); guide.setAttribute("x2", d.x); guide.setAttribute("visibility","visible");
+    tip.innerHTML = d.html; tip.style.display = "block";
+    const s = r.width / W, tw = tip.offsetWidth, left = d.x * s + 14;
+    tip.style.left = (left + tw > r.width ? d.x * s - tw - 14 : left) + "px"; tip.style.top = "6px";
+  };
+  const hide = () => { tip.style.display = "none"; guide.setAttribute("visibility","hidden"); };
+  svg.addEventListener("pointermove", move); svg.addEventListener("pointerleave", hide);
+  svg.addEventListener("pointerdown", move);
+}
+
+// ---------- árgrafikon
+function priceChart(){
+  const host = $("priceChart"); host.innerHTML = "";
+  const P = D.prices;
+  if (!P.ts.length || !P.zones.HU){ host.innerHTML = '<div class="err">Nincs elérhető ár adat.</div>'; return; }
+  const W = Math.max(320, host.clientWidth), H = W < 520 ? 280 : 340;
+  const narrow = W < 520, lstep = narrow ? 12 : 6;
+  const m = {l:54, r:narrow ? 44 : 64, t:22, b:36};
+  const zs = ["HU", ...Object.keys(P.zones).filter(z => z !== "HU" && selected.has(z))];
+  const n = P.ts.length, step = M.step;
+  const all = zs.flatMap(z => P.zones[z]).filter(v => v != null);
+  const pad = (Math.max(...all) - Math.min(...all)) * .08 || 5;
+  const lo0 = Math.min(...all) - pad, hi0 = Math.max(...all) + pad;
+  const ny = nice(Math.min(lo0, 0), Math.max(hi0, 0), 5);
+  const t0 = M.pts[0].getTime(), t1 = M.pts[n - 1].getTime() + step;
+  const x0 = m.l, x1 = W - m.r, y0 = H - m.b, y1 = m.t;
+  const X = t => x0 + (t - t0) / (t1 - t0) * (x1 - x0);
+  const Y = v => y0 - (v - ny.lo) / (ny.hi - ny.lo) * (y0 - y1);
+  const svg = el("svg", {viewBox:"0 0 " + W + " " + H, width:W, height:H}, host);
+  const ink = css("--ink"), ink2 = css("--ink2"), grid = css("--grid"), muted = css("--muted");
+  ny.ticks.forEach(t => {
+    el("line", {x1:x0, x2:x1, y1:Y(t), y2:Y(t), stroke: t === 0 ? muted : grid, "stroke-width": t === 0 ? 1.2 : 1}, svg);
+    const tx = el("text", {x:x0 - 8, y:Y(t) + 4, "text-anchor":"end", "font-size":12, fill:ink2}, svg); tx.textContent = nf0.format(t);
+  });
+  const unit = el("text", {x:x0 - 8, y:y1 - 9, "text-anchor":"end", "font-size":11, fill:muted}, svg); unit.textContent = "€/MWh";
+
+  // napválasztók és időtengely
+  const nowDay = localDayKey(NOW);
+  let lastKey = null;
+  M.pts.forEach((t,i) => {
+    const p = localParts(t), key = localDayKey(t);
+    if (key !== lastKey){
+      lastKey = key;
+      const x = X(t.getTime());
+      if (i > 0) el("line", {x1:x, x2:x, y1:y1, y2:y0, stroke:grid, "stroke-width":1}, svg);
+      const rel = key === nowDay ? "ma" : (key > nowDay ? "holnap" : "tegnap");
+      const dl = el("text", {x:x + 6, y:y1 - 9 + 0, "font-size":12, fill:ink2, "font-weight":650}, svg);
+      dl.textContent = narrow ? rel : rel + " · " + fWeek.format(t);
+    }
+    if (p.h % lstep === 0 && localParts(new Date(t.getTime() - step)).h !== p.h){
+      const x = X(t.getTime());
+      const lab = el("text", {x:x, y:y0 + 17, "text-anchor":"middle", "font-size":narrow ? 11 : 12, fill:ink2}, svg); lab.textContent = String(p.h).padStart(2,"0") + ":00";
+      el("line", {x1:x, x2:x, y1:y0, y2:y0 + 4, stroke:muted}, svg);
+    }
+  });
+
+  // "most" jelölő
+  if (NOW.getTime() >= t0 && NOW.getTime() <= t1){
+    const x = X(NOW.getTime());
+    el("line", {x1:x, x2:x, y1:y1, y2:y0, stroke:ink2, "stroke-width":1.2, "stroke-dasharray":"4 3"}, svg);
+    const mt = el("text", {x:x + 4, y:y0 - 6, "font-size":11.5, fill:ink2}, svg); mt.textContent = "most";
+  }
+
+  // vonalak (lépcsős: egy piaci időegységen belül az ár állandó)
+  const ends = [];
+  zs.forEach(z => {
+    const v = P.zones[z]; let d = "", open = false, lastV = null;
+    v.forEach((val,i) => {
+      if (val == null){ open = false; return; }
+      const xa = X(M.pts[i].getTime()), xb = X(M.pts[i].getTime() + step), y = Y(val);
+      d += (open ? "L" : "M") + xa.toFixed(1) + " " + y.toFixed(1) + "L" + xb.toFixed(1) + " " + y.toFixed(1);
+      open = true; lastV = {x:xb, y, val};
+    });
+    el("path", {d, fill:"none", stroke:zoneColor(z), "stroke-width": z === "HU" ? 2.6 : 2, "stroke-linejoin":"round", "stroke-linecap":"butt"}, svg);
+    if (lastV) ends.push({z, y:lastV.y});
+  });
+  // közvetlen feliratok a vonalak végén (ütközés elkerülésével)
+  ends.sort((a,b) => a.y - b.y);
+  for (let i = 1; i < ends.length; i++) if (ends[i].y - ends[i-1].y < 14) ends[i].y = ends[i-1].y + 14;
+  ends.forEach(e => {
+    const t = el("text", {x:x1 + 6, y:e.y + 4, "font-size":12.5, "font-weight":650, fill:ink}, svg); t.textContent = e.z;
+    el("rect", {x:x1 - 3, y:e.y - 4, width:7, height:7, rx:2, fill:zoneColor(e.z)}, svg);
+  });
+
+  hover(host, svg, W, H, x0, x1, n, i => {
+    const t = M.pts[i], tt = new Date(t.getTime() + step);
+    const rows = zs.map(z => { const v = P.zones[z][i]; return row(zoneColor(z), NAMES[z] || z, v == null ? "–" : nf1.format(v) + " €/MWh"); }).join("");
+    return {x:X(t.getTime() + step/2), html:'<div class="t">' + fDate.format(t) + ' ' + fTime.format(t) + '–' + fTime.format(tt) + '</div>' + rows};
+  });
+}
+
+function foot(){
+  const miss = (D.errors || []).map(e => esc(String(e).replace(/:\s*(NoMatchingDataError|InvalidBusinessParameterError)\s*$/, ""))).join(", ");
+  $("foot").innerHTML =
+    '<p><b>Hogyan olvasd.</b> Az áramlás a szomszédos rendszerirányítók mérésén alapuló fizikai áramlás, órás átlagban. Az ENTSO-E ezeket a rendszerirányítók közlése után teszi közzé, ezért az oldal nem valós idejű: a legfrissebb óra jellemzően órákkal késik, határonként eltérően.</p>' +
+    '<p>A day-ahead ár a másnapi piac eredménye zónánként. Nem a pillanatnyi piaci ár: az intraday és a kiegyenlítő energia ára itt nem szerepel.</p>' +
+    '<p>Adatforrás: ENTSO-E Transparency Platform. Frissítés: az adatgyűjtő futtatásakor.' + (miss ? ' Az ENTSO-E nem közölt adatot erre: ' + miss + '.' : '') + '</p>';
+}
+
+load();
+</script>
+</body>
+</html>
