@@ -1,0 +1,52 @@
+name: Hosszú távú adatok
+
+# Évekre visszamenő, havi összesítésű adatok az "Európa és trendek" oldalhoz (history.json).
+# Hetente egyszer fut, és kézzel is indítható: Actions -> Hosszú távú adatok -> Run workflow.
+# Az első futás tölti le az összes évet (akár 10-25 perc); a későbbiek csak a folyó évet frissítik.
+# Az eredmény a repó gyökerébe kerül (history.json), a következő 20 perces futás teszi közzé.
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: history
+  cancel-in-progress: false
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Függőségek
+        run: pip install -r requirements.txt
+
+      - name: Teszt (kitalált klienssel, hálózat nélkül)
+        run: python -I tests/test_history.py
+
+      - name: Adatgyűjtés az ENTSO-E-ről
+        env:
+          ENTSOE_TOKEN: ${{ secrets.ENTSOE_TOKEN }}
+        run: python history.py --out history.json --budget 1800
+
+      - name: Mentés a repóba
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add history.json
+          if git diff --cached --quiet; then
+            echo "Nincs változás."
+          else
+            git commit -m "history.json frissítése"
+            git push
+          fi
