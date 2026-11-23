@@ -40,6 +40,14 @@ NEIGHBOURS = {
     "SI": "Szlovénia",
 }
 PRICE_ZONES = [HOME] + list(NEIGHBOURS)
+# Az európai pillanatkép és a hosszú távú összehasonlítás zónái. Ha egy zónára nincs day-ahead ár
+# (pl. Szerbia), egyszerűen kimarad.
+EUROPE_ZONES = {
+    "HU": "Magyarország", "AT": "Ausztria", "SK": "Szlovákia", "RO": "Románia", "HR": "Horvátország",
+    "SI": "Szlovénia", "RS": "Szerbia", "CZ": "Csehország", "DE_LU": "Németország–Luxemburg",
+    "PL": "Lengyelország", "BG": "Bulgária", "IT_NORD": "Észak-Olaszország", "FR": "Franciaország",
+    "CH": "Svájc", "NL": "Hollandia", "BE": "Belgium", "ES": "Spanyolország", "GR": "Görögország",
+}
 # Határonkénti nap előtti NTC csak a nem-Core határokon van (a Core-határokon flow-based kapacitás-kiosztás van,
 # ott nincs NTC, a lekérdezés felesleges és lassú). A magyar Core-határok: AT, SK, RO, HR, SI.
 NTC_BORDERS = ("RS", "UA")
@@ -538,6 +546,29 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
     }
 
 
+def collect_europe(client, now=None, budget_s=120, workers=8):
+    """Az európai zónák day-ahead ára az utolsó napokra (europe.json). Hibája nem érinti a többi fájlt."""
+    now = now or pd.Timestamp.now(tz="UTC")
+    local = now.tz_convert("Europe/Budapest").normalize()
+    p_start, p_end = local - pd.Timedelta(days=2), local + pd.Timedelta(days=2)
+    B = Batch(budget_s, workers=workers)
+    for z in EUROPE_ZONES:
+        B.add(f"ár {z}", lambda z=z: client.query_day_ahead_prices(z, start=p_start, end=p_end))
+    series = {}
+    for z in EUROPE_ZONES:
+        s = B.get(f"ár {z}")
+        if s is not None:
+            series[z] = hourly_mean(s.tz_convert("UTC"))
+    B.close()
+    out = {"generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "ENTSO-E Transparency Platform", "demo": False,
+           "names": EUROPE_ZONES, "ts": [], "zones": {}, "errors": B.errors + B.notes(), "missing": B.missing}
+    if series:
+        idx = pd.DatetimeIndex(sorted(set().union(*[set(s.index) for s in series.values()])))
+        out["ts"] = iso(idx)
+        out["zones"] = {z: to_list(s.reindex(idx)) for z, s in series.items()}
+    return out
+
+
 def write_json(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -573,6 +604,17 @@ def main():
     print(f"Kész: {args.out} | határok adattal: {ok} | hibák: {len(data['errors'])}")
     for e in data["errors"]:
         print("  -", e)
+
+    eu_out = os.path.join(os.path.dirname(os.path.abspath(args.out)), "europe.json")
+    try:
+        eu = collect_europe(client, budget_s=min(args.budget, 120), workers=args.workers)
+        if eu["zones"]:
+            write_json(eu_out, eu)
+            print(f"Kész: {eu_out} | zónák: {sorted(eu['zones'])} | hibák: {len(eu['errors'])}")
+        else:
+            print("FIGYELEM: az európai árakra semmi sem érkezett; az europe.json nem íródik felül.")
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        print(f"FIGYELEM: az európai árak gyűjtése meghiúsult ({exc.__class__.__name__}); az europe.json nem íródik felül.")
 
     if args.skip_engineer:
         return
