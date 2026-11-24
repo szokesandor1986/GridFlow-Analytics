@@ -444,7 +444,7 @@ function controls(){
   document.querySelectorAll(".zn").forEach(e => e.textContent = "– " + zl.names[SEL.zone]);
   let note = "";
   if (!C0) note = "A többi ország adata az adatgyűjtő első sikeres futása után jelenik meg.";
-  else if (!hu) note = "Ennél az országnál a nettó import a day-ahead nettó pozícióból (menetrend) jön, nem fizikai mérésből. A határonkénti áramlás, a blokkszintű termelés, a kiesések és az aFRR/mFRR csak Magyarországra készül.";
+  else if (!hu) note = "Ennél az országnál a nettó import a határokon mért fizikai áramlások különbsége (bejövő − kimenő). Az ENTSO-E termelési adata nem teljes (a kis erőművek és háztartási napelemek általában hiányoznak), ezért a termelés + import ritkán zárja pontosan a fogyasztást. A határonkénti áramlás, a blokkszintű termelés, a kiesések és az aFRR/mFRR csak Magyarországra készül.";
   else note = "Magyarországnál a nettó import a határokon mért fizikai áramlás.";
   try{
     const H = (hu ? D : C0) || D || C0, hts = H && H.hourly_ts ? H.hourly_ts : [];
@@ -759,7 +759,8 @@ function snapshot(){
   const t = [
     tile("Fogyasztás", nf0.format(load) + " <small>MW</small>", span(i)),
     tile(M.isHU ? "Hazai termelés" : "Termelés", nf0.format(gen) + " <small>MW</small>", "közölt blokkok és típusok összege"),
-    tile("Nettó import", M.net[i] == null ? "–" : signed(M.net[i]) + " <small>MW</small>", M.net[i] == null ? (M.isHU ? "nincs teljes határ-adat" : "nincs nettó pozíció") : (M.isHU ? "fizikai áramlás, + import" : "day-ahead nettó pozíció, + import")),
+    tile("Nettó import", M.net[i] == null ? "–" : signed(M.net[i]) + " <small>MW</small>", M.net[i] == null ? "nincs teljes határ-adat" : "a határokon mért fizikai áramlás, + import"),
+    M.isHU || M.net[i] == null ? "" : tile("Nem közölt rész", signed(load - gen - M.net[i]) + " <small>MW</small>", "fogyasztás − termelés − nettó import: a nem közölt (kis, háztartási) termelés és a mérési eltérés"),
     tile("Nap és szél részaránya", sw == null ? "–" : nf0.format(sw / gen * 100) + " <small>%</small>", "a hazai termelésből"),
     tile("CO₂-intenzitás", M.co2[i] == null ? "–" : nf0.format(M.co2[i]) + " <small>g/kWh</small>", "termelés-alapú becslés"),
     tile("Nem-szinkron részarány", M.snsp[i] == null ? "–" : nf0.format(M.snsp[i]) + " <small>%</small>", "SNSP-becslés")

@@ -879,14 +879,39 @@ def _corr(a, b):
     return float(d.iloc[:, 0].corr(d.iloc[:, 1]))
 
 
+def _adjacency():
+    """Szomszédsági gráf az entsoe-py NEIGHBOURS táblájából, szimmetrizálva (hiányzó zónákhoz is: UA, BY, TR, ...)."""
+    try:
+        from entsoe.mappings import NEIGHBOURS as NB
+    except Exception:  # noqa: BLE001
+        return {}
+    adj = {}
+    for k, vs in NB.items():
+        for v in vs:
+            adj.setdefault(k, set()).add(v)
+            adj.setdefault(v, set()).add(k)
+    return adj
+
+
+def _members(z, adj):
+    """Egy ország / csoport tagzónái a határáramlás-összegzéshez."""
+    if z in ZONE_GROUPS:
+        return list(ZONE_GROUPS[z])
+    if z in ZONE_FIRST:
+        have = [x for x in ZONE_FIRST[z] if x in adj]
+        return have[:1] or [z]
+    return [z]
+
+
 def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zones=None):
     """Más országok (zónák) óránkénti adatai a mérnöki oldal országválasztójához (countries.json):
     fogyasztás (tény, előrejelzés), termelés típusonként, nap/szél előrejelzés, nettó import (day-ahead nettó pozíció),
     eltérési ár. A magyar adat az engineer.json-ban van, ide nem kerül.
 
-    A nettó pozíciót az entsoe-py pozitívnak adja exportnál; az oldalnak importra van szüksége (import = pozitív).
-    Az előjelet zónánként ellenőrizzük: a nettó importnak a fogyasztás és a hazai termelés különbségével
-    egyirányban kell mozognia. Ha a korreláció egyértelműen negatív, a sorozatot megfordítjuk, és ezt a "netpos_flipped" jelzi."""
+    Nettó import (import = pozitív): a zóna összes határán mért fizikai áramlás (12.1.G) különbsége (bejövő - kimenő).
+    A day-ahead nettó pozíciót (12.1.E) már nem használjuk: az entsoe-py a sorozat abszolút értékét adja vissza
+    (előjel nélkül), ezért az irány nem megbízható, ráadásul menetrend, nem fizikai mérés.
+    """
     now = now or pd.Timestamp.now(tz="UTC")
     zones = [z for z in (zones or ALL_ZONES) if z != HOME]
     start = (now - pd.Timedelta(hours=hours)).floor("h")
@@ -898,14 +923,31 @@ def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zone
     for z in zones:
         B.add(f"fogyasztás {z}", lambda z=z: client.query_load(z, start=start, end=end))
         B.add(f"termelés {z}", lambda z=z: client.query_generation(z, start=start, end=end, nett=True))
+    adj = _adjacency()
+    members = {z: _members(z, adj) for z in zones}
+    pairs, borders = [], {}                      # irányított (a, b) párok és zónánként a külső határok listája
+    seen = set()
     for z in zones:
-        B.add(f"nettó pozíció {z}", lambda z=z: client.query_net_position(z, start=start, end=end, dayahead=True))
+        bl = []
+        for m in members[z]:
+            for n in sorted(adj.get(m, ())):
+                if n in members[z]:
+                    continue
+                bl.append((m, n))
+                for pr in ((n, m), (m, n)):
+                    if pr not in seen:
+                        seen.add(pr); pairs.append(pr)
+        borders[z] = bl
+    f_start, f_end = start, min(end, (now + pd.Timedelta(hours=2)).ceil("h"))
+    for a, b in pairs:
+        B.add(f"határáramlás {a}->{b}", lambda a=a, b=b: client.query_crossborder_flows(a, b, start=f_start, end=f_end))
+    for z in zones:
         B.add(f"fogyasztás előrejelzés {z}", lambda z=z: client.query_load_forecast(z, start=start, end=end))
     for z in zones:
         B.add(f"nap/szél előrejelzés {z}", lambda z=z: client.query_wind_and_solar_forecast(z, start=start, end=end))
         B.add(f"eltérési ár {z}", lambda z=z: client.query_imbalance_prices(z, start=start, end=end))
 
-    out_z, flipped, corr_log = {}, [], {}
+    out_z, corr_log = {}, {}
     for z in zones:
         rec = {}
         la = B.get(f"fogyasztás {z}")
@@ -929,16 +971,28 @@ def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zone
                 sw[k] = to_list(pd.concat(got, axis=1).sum(axis=1, min_count=1)) if got else None
             if any(v is not None for v in sw.values()):
                 rec["solar_wind_forecast"] = sw
-        npos = B.get(f"nettó pozíció {z}")
-        if npos is not None:
-            net = hourly_mean(npos.iloc[:, 0] if isinstance(npos, pd.DataFrame) else npos).reindex(idx) * -1   # import = pozitív
+        comps, have_b = [], 0
+        for m, n in borders.get(z, []):
+            fin, fout = B.get(f"határáramlás {n}->{m}"), B.get(f"határáramlás {m}->{n}")
+            if fin is None and fout is None:
+                continue
+            have_b += 1
+            if fin is not None:
+                comps.append(hourly_mean(fin.iloc[:, 0] if isinstance(fin, pd.DataFrame) else fin).reindex(idx))
+            if fout is not None:
+                comps.append(-hourly_mean(fout.iloc[:, 0] if isinstance(fout, pd.DataFrame) else fout).reindex(idx))
+        if comps:
+            df = pd.concat(comps, axis=1)
+            nb_total = max(1, len(borders.get(z, [])))
+            # egy órát csak akkor fogadunk el, ha a határok legalább 70 %-áról van mérés (különben a mérleg torz lenne)
+            ok = df.notna().sum(axis=1) >= max(1.0, 0.7 * len(comps))
+            net = df.sum(axis=1, min_count=1).where(ok)
             if rec.get("load", {}).get("actual") is not None and gen_total is not None:
                 resid = pd.Series(rec["load"]["actual"], index=idx, dtype="float64") - gen_total
                 c = _corr(net, resid)
                 corr_log[z] = None if c is None else round(c, 2)
-                if c is not None and c < -0.3:
-                    net, _ = net * -1, flipped.append(z)
             rec["net_import_mw"] = to_list(net)
+            rec["net_borders"] = [have_b, nb_total]
         ip = B.get(f"eltérési ár {z}")
         if ip is not None:
             cols = {str(c).lower(): c for c in ip.columns}
@@ -961,7 +1015,6 @@ def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zone
         "zones": out_z,
         "co2": {"factors": CO2_FACTORS, "source": CO2_SOURCE},
         "netpos_corr": corr_log,
-        "netpos_flipped": flipped,
         "errors": B.errors + B.notes(),
         "missing": B.missing,
     }
@@ -980,7 +1033,7 @@ def main():
     p.add_argument("--engineer-out", default=None, help="alapértelmezés: engineer.json a --out mellett")
     p.add_argument("--skip-engineer", action="store_true", help="a mérnöki adatkörök kihagyása")
     p.add_argument("--hours", type=int, default=168, help="ennyi órára visszamenőleg kéri az adatokat (az oldalak időablaka ebből választ)")
-    p.add_argument("--countries-budget", type=int, default=300, help="az országadatok időkerete másodpercben")
+    p.add_argument("--countries-budget", type=int, default=420, help="az országadatok időkerete másodpercben")
     p.add_argument("--skip-countries", action="store_true", help="az országválasztó adatainak (countries.json) kihagyása")
     p.add_argument("--workers", type=int, default=12, help="egyszerre ennyi ENTSO-E kérés fut")
     p.add_argument("--budget", type=int, default=240, help="a fő és a mérnöki rész időkerete külön-külön, másodpercben")
@@ -1051,7 +1104,7 @@ def main():
         print("FIGYELEM: az országadatokra semmi sem érkezett; a countries.json nem íródik felül.")
         return
     write_json(cn_out, cn)
-    print(f"Kész: {cn_out} | zónák: {sorted(cn['zones'])} | nettó pozíció előjele megfordítva: {cn['netpos_flipped']} | korreláció: {cn['netpos_corr']} | hibák: {len(cn['errors'])}")
+    print(f"Kész: {cn_out} | zónák: {sorted(cn['zones'])} | nettó import: fizikai határáramlásból | korreláció (fogyasztás-termelés ↔ nettó import): {cn['netpos_corr']} | hibák: {len(cn['errors'])}")
     for e in cn["errors"][:30]:
         print("  -", e)
 
