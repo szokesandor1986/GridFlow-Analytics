@@ -559,12 +559,13 @@ function geoSetup(host, key, draw){
 const zoneList = () => Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]);
 const zPath = (z) => z === "IT_NORD" ? GEO.zones.IT : GEO.zones[z];
 const zLabel = (z) => GEO.labels[z] || (z === "IT_NORD" ? GEO.labels.IT : null);
-const zBox = (z) => { const b = GEO.bbox && (GEO.bbox[z] || (z === "IT_NORD" ? GEO.bbox.IT : null)); if (!b) return null; return z === "IT_NORD" ? [b[0], b[1], b[2], Math.min(b[3], GEO.itCut)] : b; };
+const zBox = (z) => GEO.bbox && (GEO.bbox[z] || (z === "IT_NORD" ? GEO.bbox.IT : null)) || null;
+function geoCols(){ const surf = rgbOf(css("--surface")), ink = rgbOf(css("--ink")); return {land:rgbStr(mixRgb(surf, ink, .13)), nodata:rgbStr(mixRgb(surf, ink, .07)), line:rgbStr(mixRgb(surf, ink, .5)), hatch:rgbStr(mixRgb(surf, ink, .3))}; }
 function geoBase(C, k, id){
-  const surf = css("--surface"), neutral = css("--neutral");
-  el("path", {d:GEO.ctx, fill:neutral, stroke:surf, "stroke-width":.8 * k}, C);
-  el("path", {d:GEO.zones.IT, fill:neutral, stroke:surf, "stroke-width":.8 * k}, C);                    // Olaszország déli zónái: nincs adat
-  const cid = el("clipPath", {id}, el("defs", {}, C)); el("rect", {x:0, y:0, width:GEO.W, height:GEO.itCut}, cid);
+  const gc = geoCols();
+  const pat = el("pattern", {id:"hatchND", width:6 * k, height:6 * k, patternUnits:"userSpaceOnUse", patternTransform:"rotate(45)"}, el("defs", {}, C));
+  el("rect", {width:6 * k, height:6 * k, fill:gc.nodata}, pat); el("line", {x1:0, y1:0, x2:0, y2:6 * k, stroke:gc.hatch, "stroke-width":1.2 * k}, pat);
+  el("path", {d:GEO.ctx, fill:gc.land, stroke:gc.line, "stroke-width":.6 * k, "stroke-linejoin":"round"}, C);     // az ENTSO-E-n kívüli országok
 }
 
 function geoZoneMap(host, M, cur, vals, color, info, nm){
@@ -574,11 +575,8 @@ function geoZoneMap(host, M, cur, vals, color, info, nm){
     zl.forEach(z => {
       const v = vals[z], pinned = z === mapPin;
       const g = el("g", {tabindex:0, role:"img", "aria-label":nm(z) + ": " + (has(v) ? cur.f(v) + " " + cur.u : "nincs adat")}, C); g.style.cursor = "pointer"; g.style.outline = "none";
-      const at = {d:zPath(z), fill:has(v) ? rgbStr(color(v)) : surf, stroke:pinned || z === "HU" ? ink : surf, "stroke-width":(pinned || z === "HU" ? 2 : .9) * k, "stroke-linejoin":"round"};
-      if (z === "IT_NORD") at["clip-path"] = "url(#itN)";
-      if (!has(v)) at["fill-opacity"] = .6;
+      const gc = geoCols(), at = {d:zPath(z), fill:has(v) ? rgbStr(color(v)) : "url(#hatchND)", stroke:pinned || z === "HU" ? ink : gc.line, "stroke-width":(pinned || z === "HU" ? 2.2 : .8) * k, "stroke-linejoin":"round"};
       el("path", at, g);
-      if (z === "IT_NORD") el("path", {d:zPath(z), fill:"none", stroke:surf, "stroke-width":.9 * k, "clip-path":"url(#itN)"}, g);
       const mv = (ev) => S.showTip(ev, info(z));
       g.addEventListener("pointermove", mv); g.addEventListener("pointerenter", mv); g.addEventListener("pointerleave", S.hideTip);
       g.addEventListener("click", () => { if (S.st.dragged) return; mapPin = mapPin === z ? null : z; mapSection(); });
@@ -707,7 +705,7 @@ function mapSection(){
 
   const at = (M.at && Object.keys(M.at).filter(k => k.startsWith(mapMetric + "|")).map(k => M.at[k])[0]);
   $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + (at ? " Adat: " + fDate.format(at) + ", " + fTime.format(at) + "." : "") +
-    " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna (vagy a kiválasztott ország). A szürke területek nincsenek az ENTSO-E adatai között, vagy az adott mutatóra nincs közölt érték. Nagyítás: +/− gombok, Ctrl + görgő, dupla kattintás vagy két ujjas csippentés; húzással mozgatható.";
+    " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna (vagy a kiválasztott ország). Olaszország egy darabban látszik, a színe az északi zóna értékét mutatja. A csíkozott területek nincsenek az ENTSO-E adatai között, vagy az adott mutatóra nincs közölt érték. Nagyítás: +/− gombok, Ctrl + görgő, dupla kattintás vagy két ujjas csippentés; húzással mozgatható.";
   mapPanel(M, nm);
   const miss = !GEO ? [] : Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]).filter(z => !has(vals[z])).map(z => nm(z));
   const mm = $("mapMiss"), ml = ((EU && EU.missing) || []).slice(0, 80);
@@ -750,8 +748,7 @@ function fmapSection(){
     geoBase(C, k, "itN2");
     zoneList().forEach(z => {
       const c = col(z), g = el("g", {}, C); g.style.cursor = "pointer";
-      const at = {d:zPath(z), fill:c ? rgbStr(c) : surf, "fill-opacity":c ? 1 : .6, stroke:z === focus ? ink : surf, "stroke-width":(z === focus ? 2.2 : .9) * k, "stroke-linejoin":"round"};
-      if (z === "IT_NORD") at["clip-path"] = "url(#itN2)";
+      const gc = geoCols(), at = {d:zPath(z), fill:c ? rgbStr(c) : "url(#hatchND)", stroke:z === focus ? ink : gc.line, "stroke-width":(z === focus ? 2.4 : .8) * k, "stroke-linejoin":"round"};
       el("path", at, g);
       g.addEventListener("pointermove", ev => S.showTip(ev, zinfo(z))); g.addEventListener("pointerleave", S.hideTip);
       g.addEventListener("click", () => { if (S.st.dragged) return; fmFocus = (fmFocus === z || z === "HU") ? null : z; fmapSection(); });
