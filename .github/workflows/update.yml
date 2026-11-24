@@ -2,6 +2,8 @@ name: Adatfrissítés és közzététel
 
 # Az ENTSO-E adatai óránként frissülnek, ezért 20 percenként futtatni bőven elég.
 # A GitHub az ütemezett futásokat késleltetheti; ez normális.
+# Feltöltéskor (push) is lefut, hogy az új oldalak azonnal megjelenjenek. Ha egymás után több feltöltés érkezik
+# (pl. előbb az oldalfájlok, utána a .github mappa), az újabb megszakítja a régebbit, és csak az utolsó gyűjt adatot.
 on:
   schedule:
     - cron: "7,27,47 * * * *"
@@ -14,16 +16,23 @@ permissions:
   pages: write
   id-token: write
 
-# Egyszerre csak egy közzététel fusson; a félbehagyott futást nem szakítjuk meg.
+# Egyszerre csak egy közzététel fusson. Az ütemezett futást nem szakítjuk meg, de egy feltöltés által indított
+# futást igen, ha közben újabb feltöltés érkezik.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      # Feltöltésnél várunk: ha a következő feltöltés (pl. a .github mappa) ezalatt megérkezik, ez a futás megszakad,
+      # és még nem hívott meg semmilyen külső szolgáltatást.
+      - name: Várakozás a további feltöltésekre
+        if: github.event_name == 'push'
+        run: sleep 150
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
