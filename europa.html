@@ -57,6 +57,7 @@ header p.sub{margin:0;color:var(--ink2);max-width:75ch}
 .tip .row{display:flex;align-items:center;gap:10px;justify-content:space-between}
 .tip .row span:first-child{display:inline-flex;align-items:center;gap:6px}
 .tip i{display:inline-block;width:10px;height:10px;border-radius:3px}
+.mtl{display:flex;align-items:center;gap:10px;flex:1 1 280px;min-width:240px}.mtl input{flex:1}.mtl span{font-size:13px;color:var(--ink2);white-space:nowrap}
 .ptiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}.pt{border:1px solid var(--grid);border-radius:10px;padding:8px 10px}.pl{font-size:12.5px;color:var(--ink2)}.pv{font-size:19px;font-weight:700}.pv small{font-size:12px;font-weight:500;color:var(--muted)}
 .tip .sub{color:var(--muted);margin-top:3px}
 .chips{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px}
@@ -107,6 +108,7 @@ text{font-family:inherit}
     <h2>Térkép: az európai zónák egy pillantásra</h2>
     <p class="hint">Egy színes terület egy ajánlati zóna (Észak-Olaszország az ország északi része, közelítő határral). Válassz mutatót. Egérrel vagy érintéssel az adott zóna összes elérhető értéke látszik.</p>
     <div class="chips" id="mapChips" role="group" aria-label="Térkép mutatója"></div>
+    <div class="chips" id="mapTime" role="group" aria-label="Időablak" style="margin-top:8px"></div>
     <div class="chart" id="mapChart"></div>
     <div id="mapPanel"></div>
     <div class="legend" id="mapLegend" style="margin-top:10px"></div>
@@ -454,14 +456,62 @@ function mapHour(src, netArr, netTs){
   const ld = src.load && has(src.load[i]) ? src.load[i] : null;
   return {t:new Date(ts[i]), co2:em / tot, res:res / tot * 100, net, gen:tot, load:ld};
 }
+// ---------- órás idősorok a térképhez: ár, termelés, fogyasztás, CO₂, megújuló, nettó import (közös órás rács)
+let MSER = null, MSERK = null;
+function mapSeries(){
+  const C = MAPX && MAPX.c, E = MAPX && MAPX.e, D = MAPX && MAPX.d, key = [EU, C, E, D];
+  if (MSER && MSERK && key.every((x, i) => x === MSERK[i])) return MSER;
+  const lo = +NOW - 170 * 3600e3, hi = +NOW + 48 * 3600e3, set = new Set();
+  const add = (arr) => (arr || []).forEach(t => { const m = +new Date(t); if (m >= lo && m <= hi) set.add(m); });
+  if (EU && EU.ts) add(EU.ts); if (C) add(C.hourly_ts); if (E) add(E.hourly_ts);
+  const grid = [...set].sort((a, b) => a - b), n = grid.length, at = new Map(grid.map((m, i) => [m, i]));
+  const S = {grid, z:{}};
+  const Z = (z) => S.z[z] = S.z[z] || {price:new Array(n).fill(null), gen:new Array(n).fill(null), em:new Array(n).fill(null), res:new Array(n).fill(null), load:new Array(n).fill(null), net:new Array(n).fill(null)};
+  if (EU && EU.zones) Object.keys(EU.zones).forEach(z => { const a = EU.zones[z], r = Z(z); EU.ts.forEach((t, k) => { const i = at.get(+new Date(t)); if (i != null && has(a[k])) r.price[i] = a[k]; }); });
+  const F = (C && C.co2 && C.co2.factors) || (E && E.co2 && E.co2.factors) || {};
+  const fill = (z, ts, G, load, netArr, netTs) => {
+    const r = Z(z), types = G ? Object.keys(G) : [];
+    (ts || []).forEach((t, k) => {
+      const i = at.get(+new Date(t)); if (i == null) return;
+      if (types.some(x => has(G[x] && G[x][k]))){
+        let tot = 0, em = 0, rs = 0;
+        types.forEach(x => { const v = G[x][k]; if (!has(v) || v < 0) return; tot += v; em += v * (F[x] != null ? F[x] : (F.other != null ? F.other : 700)); if (["solar", "wind", "hydro", "bio"].includes(x)) rs += v; });
+        if (tot > 0){ r.gen[i] = tot; r.em[i] = em; r.res[i] = rs; }
+      }
+      if (load && has(load[k])) r.load[i] = load[k];
+      if (netArr && !netTs && has(netArr[k])) r.net[i] = netArr[k];
+    });
+    if (netArr && netTs) netTs.forEach((t, k) => { const i = at.get(+new Date(t)); if (i != null && has(netArr[k])) r.net[i] = netArr[k]; });
+  };
+  if (C && C.zones) Object.keys(C.zones).forEach(z => { const zz = C.zones[z]; fill(z, C.hourly_ts, zz.generation, zz.load && zz.load.actual, zz.net_import_mw, null); });
+  if (E) fill("HU", E.hourly_ts, E.generation, E.load && E.load.actual, D && D.net_import_mw, D && D.hourly_ts);
+  MSER = S; MSERK = key; return S;
+}
+// Időablak: "24h" = a legutóbbi 24 óra átlaga, "hour" = egy kiválasztott óra
+let mapTime = {mode:"24h", i:null};
+function mapWindow(S){
+  const g = S.grid; let now = -1; g.forEach((m, i) => { if (m <= +NOW) now = i; }); if (now < 0) now = g.length - 1;
+  const zs = Object.values(S.z);
+  const lastData = (() => { for (let i = now; i >= 0; i--){ const c = zs.filter(r => has(r.gen[i])).length; if (c >= Math.max(3, zs.filter(r => r.gen.some(has)).length * .5)) return i; } return now; })();
+  if (mapTime.mode === "hour"){ if (mapTime.i == null || mapTime.i >= g.length) mapTime.i = lastData; return {from:mapTime.i, to:mapTime.i, now, lastData, label:fDate.format(new Date(g[mapTime.i])) + " " + fTime.format(new Date(g[mapTime.i])) + "–" + fTime.format(new Date(g[mapTime.i] + 3600e3))}; }
+  const to = Math.max(lastData, now - 3), from = Math.max(0, to - 23);
+  return {from, to, now, lastData, label:"az elmúlt 24 óra átlaga (" + fDate.format(new Date(g[from])) + " " + fTime.format(new Date(g[from])) + " – " + fDate.format(new Date(g[to])) + " " + fTime.format(new Date(g[to] + 3600e3)) + ")"};
+}
 function mapModel(){
   const M = {zones:new Set(), v:{}};
   const put = (k, z, val, extra) => { if (!has(val)) return; (M.v[k] = M.v[k] || {})[z] = val; M.zones.add(z); if (extra) (M.at = M.at || {})[k + "|" + z] = extra; };
-  if (EU && EU.zones){
-    const T = EU.ts.map(x => new Date(x)); let ni = -1; T.forEach((t, i) => { if (t <= NOW) ni = i; }); if (ni < 0) ni = 0;
-    const hu = EU.zones.HU ? EU.zones.HU[ni] : null;
-    Object.keys(EU.zones).forEach(z => { const v = EU.zones[z][ni]; put("price", z, v, T[ni]); if (has(v) && has(hu)) put("diff", z, v - hu, T[ni]); });
-  }
+  const S = mapSeries(), Wn = mapWindow(S); M.win = Wn; M.S = S;
+  const mean = (arr) => { let t = 0, c = 0; for (let i = Wn.from; i <= Wn.to; i++) if (has(arr[i])){ t += arr[i]; c++; } return c ? t / c : null; };
+  const sum = (arr) => { let t = 0, c = 0; for (let i = Wn.from; i <= Wn.to; i++) if (has(arr[i])){ t += arr[i]; c++; } return c ? t : null; };
+  const hu = S.z.HU;
+  Object.keys(S.z).forEach(z => {
+    const r = S.z[z];
+    put("price", z, mean(r.price));
+    if (hu && z !== "HU"){ let t = 0, c = 0; for (let i = Wn.from; i <= Wn.to; i++) if (has(r.price[i]) && has(hu.price[i])){ t += r.price[i] - hu.price[i]; c++; } if (c) put("diff", z, t / c); }
+    const g = sum(r.gen);
+    if (g) { put("gen", z, mean(r.gen)); put("co2", z, sum(r.em) / g); put("res", z, sum(r.res) / g * 100); }
+    put("load", z, mean(r.load)); put("net", z, mean(r.net));
+  });
   if (H && H.months){
     const keys = Object.keys(H.months).sort().filter(k => !H.months[k].partial).slice(-12);
     if (keys.length >= 9) (H.zones || []).forEach(z => {
@@ -471,26 +521,18 @@ function mapModel(){
     });
     M.span = keys.length ? monthLabel(keys[0]) + " – " + monthLabel(keys[keys.length - 1]) : "";
   }
-  if (MAPX){
-    const C = MAPX.c;
-    if (C && C.zones) Object.keys(C.zones).forEach(z => { const zz = C.zones[z], r = mapHour({hourly_ts:C.hourly_ts, generation:zz.generation, co2:C.co2, load:zz.load && zz.load.actual}, zz.net_import_mw); if (r){ put("gen", z, r.gen, r.t); put("load", z, r.load, r.t); put("co2", z, r.co2, r.t); put("res", z, r.res, r.t); put("net", z, r.net, r.t); } });
-    if (MAPX.e){
-      const r = mapHour({...MAPX.e, load:MAPX.e.load && MAPX.e.load.actual}, MAPX.d && MAPX.d.net_import_mw, MAPX.d && MAPX.d.hourly_ts);
-      if (r){ put("gen", "HU", r.gen, r.t); put("load", "HU", r.load, r.t); put("co2", "HU", r.co2, r.t); put("res", "HU", r.res, r.t); put("net", "HU", r.net, r.t); }
-    }
-  }
   return M;
 }
 const MAP_METRICS = [
-  {k:"price", n:"Ár most", u:"€/MWh", kind:"price", f:(v) => nf0.format(v), d:"A legutóbbi óra day-ahead ára."},
+  {k:"price", n:"Ár", u:"€/MWh", kind:"price", f:(v) => nf0.format(v), d:"Day-ahead ár a kiválasztott időablakban."},
   {k:"diff", n:"Különbség a magyar árhoz", u:"€/MWh", kind:"div", hue:"--c2", f:(v) => signed(v, nf0), d:"Narancs: a zóna drágább a magyarnál, kék: olcsóbb."},
   {k:"avg12", n:"Átlagár, 12 hónap", u:"€/MWh", kind:"price", f:(v) => nf0.format(v), d:"Az utolsó 12 lezárt hónap havi átlagainak átlaga."},
   {k:"neg12", n:"Negatív árú órák, 12 hónap", u:"óra", kind:"seq", hue:"--c2", f:(v) => nf0.format(v), d:"Az utolsó 12 lezárt hónap negatív árú óráinak száma."},
-  {k:"co2", n:"CO₂-intenzitás", u:"g/kWh", kind:"seq", hue:"--c7", f:(v) => nf0.format(v), d:"A termelési mixből számolt életciklus-intenzitás (IPCC AR5 mediánok); az importot nem veszi figyelembe."},
-  {k:"res", n:"Megújuló részarány", u:"%", kind:"seq", hue:"--c3", f:(v) => nf0.format(v), d:"Nap, szél, víz és biomassza a közölt termelésen belül."},
-  {k:"gen", n:"Termelés", u:"MW", kind:"seq", hue:"--c3", f:(v) => nf0.format(v), d:"A zónában közölt összes termelés a legutóbbi órában."},
-  {k:"load", n:"Fogyasztás", u:"MW", kind:"seq", hue:"--c1", f:(v) => nf0.format(v), d:"A zóna tényleges fogyasztása a legutóbbi órában."},
-  {k:"net", n:"Nettó import / export", u:"MW", kind:"div", hue:"--c2", f:(v) => signed(v, nf0), d:"Narancs: a zóna nettó importőr, kék: nettó exportőr (a legutóbbi óra)."}
+  {k:"co2", n:"CO₂-intenzitás", u:"g/kWh", kind:"seq", hue:"--c7", f:(v) => nf0.format(v), d:"A termelési mixből számolt életciklus-intenzitás (IPCC AR5 mediánok), a termeléssel súlyozva; az importot nem veszi figyelembe."},
+  {k:"res", n:"Megújuló részarány", u:"%", kind:"seq", hue:"--c3", f:(v) => nf0.format(v), d:"Nap, szél, víz és biomassza a közölt termelésen belül (a termeléssel súlyozva). Az óránkénti nézet napközben jóval nagyobb ingadozást mutat, mint a napi átlag."},
+  {k:"gen", n:"Termelés", u:"MW", kind:"seq", hue:"--c3", f:(v) => nf0.format(v), d:"A zónában közölt összes termelés a kiválasztott időablakban (átlagteljesítmény)."},
+  {k:"load", n:"Fogyasztás", u:"MW", kind:"seq", hue:"--c1", f:(v) => nf0.format(v), d:"A zóna tényleges fogyasztása a kiválasztott időablakban (átlagteljesítmény)."},
+  {k:"net", n:"Nettó import / export", u:"MW", kind:"div", hue:"--c2", f:(v) => signed(v, nf0), d:"Narancs: a zóna nettó importőr, kék: nettó exportőr (a kiválasztott időablakban)."}
 ];
 
 // ---------- nagyítható / húzható térkép (viewBox alapú). A nézet térképenként megmarad az újrarajzoláskor.
@@ -615,8 +657,11 @@ function mapPanel(M, nm){
   add("Nagykereskedelmi ár", V("price"), "€/MWh"); add("CO₂-intenzitás", V("co2"), "g/kWh"); add("Megújuló részarány", V("res"), "%");
   let fq = "";
   if (FREQ && FREQ.minute && !NONSYNC.has(z)){
-    const m = FREQ.minute.mean || []; let i = m.length - 1; while (i >= 0 && !has(m[i])) i--;
-    if (i >= 0){ tiles.push('<div class="pt"><div class="pl">Rendszerfrekvencia</div><div class="pv num">' + m[i].toFixed(3).replace(".", ",") + ' <small>Hz</small></div></div>'); fq = z === "DK" ? " Dánia nyugati fele a kontinentális, keleti fele az északi rendszerhez tartozik, a frekvencia a kontinentálisra vonatkozik." : " A frekvencia az egész kontinentális szinkronterületre közös (Energy-Charts mérés)."; }
+    const m = FREQ.minute.mean || [], t0 = +new Date(FREQ.minute.t0), st = (FREQ.minute.step || 60) * 1000, Wn = M.win, g = M.S && M.S.grid;
+    let ft = 0, fc = 0;
+    if (Wn && g) for (let k = 0; k < m.length; k++){ const t = t0 + k * st; if (t >= g[Wn.from] && t < g[Wn.to] + 3600e3 && has(m[k])){ ft += m[k]; fc++; } }
+    const i = fc >= 30 ? 0 : -1;
+    if (i >= 0){ tiles.push('<div class="pt"><div class="pl">Rendszerfrekvencia</div><div class="pv num">' + (ft / fc).toFixed(3).replace(".", ",") + ' <small>Hz</small></div></div>'); fq = z === "DK" ? " Dánia nyugati fele a kontinentális, keleti fele az északi rendszerhez tartozik, a frekvencia a kontinentálisra vonatkozik." : " A frekvencia az egész kontinentális szinkronterületre közös (Energy-Charts mérés)."; }
   } else if (NONSYNC.has(z)) fq = " Ez a zóna külön szinkronterület (északi / ír / ciprusi / grúz rendszer): a kontinentális frekvencia rá nem érvényes.";
   // kis diagram: fogyasztás és termelés az elmúlt 48 órában
   let spark = "";
@@ -638,7 +683,7 @@ function mapPanel(M, nm){
     }
   }
   if (!tiles.length){ host.innerHTML = ""; return; }
-  host.innerHTML = '<h3 style="margin:14px 0 8px">' + esc(nm(z)) + (mapPin ? "" : ' <small style="font-weight:500;color:var(--muted)">(kattints egy másik országra a váltáshoz)</small>') + '</h3><div class="ptiles">' + tiles.join("") + '</div>' + spark + (fq ? '<p class="note">' + esc(fq.trim()) + '</p>' : "");
+  host.innerHTML = '<h3 style="margin:14px 0 8px">' + esc(nm(z)) + (mapPin ? "" : ' <small style="font-weight:500;color:var(--muted)">(kattints egy másik országra a váltáshoz)</small>') + '</h3>' + (M.win ? '<p class="note" style="margin:0 0 8px">Időablak: ' + esc(M.win.label) + '.</p>' : '') + '<div class="ptiles">' + tiles.join("") + '</div>' + spark + (fq ? '<p class="note">' + esc(fq.trim()) + '</p>' : "");
 }
 
 function mapSection(){
@@ -653,6 +698,22 @@ function mapSection(){
   const cur = MAP_METRICS.find(m => m.k === mapMetric), vals = M.v[mapMetric], names = (EU && EU.names) || (H && H.names) || {}, nm = (z) => names[z] || FALLBACK_NAMES[z] || z;
   const chips = $("mapChips"); chips.innerHTML = "";
   avail.forEach(m => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(m.k === mapMetric)); b.textContent = m.n; b.addEventListener("click", () => { mapMetric = m.k; mapSection(); }); chips.appendChild(b); });
+
+  // időablak: az elmúlt 24 óra átlaga (alap) vagy egy kiválasztott óra
+  const tc = $("mapTime"), S_ = M.S, shortM = ["avg12", "neg12"].includes(mapMetric);
+  tc.innerHTML = ""; tc.style.display = shortM ? "none" : "";
+  if (!shortM){
+    const mk = (txt, mode) => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(mapTime.mode === mode)); b.textContent = txt; b.addEventListener("click", () => { mapTime.mode = mode; if (mode === "hour") mapTime.i = null; mapSection(); }); return b; };
+    tc.appendChild(mk("Elmúlt 24 óra átlaga", "24h")); tc.appendChild(mk("Óránként", "hour"));
+    if (mapTime.mode === "hour"){
+      const w = document.createElement("div"); w.className = "mtl";
+      const lo = Math.max(0, M.win.now - 120), hi = Math.min(S_.grid.length - 1, M.win.now + 36);
+      const sl = document.createElement("input"); sl.type = "range"; sl.min = lo; sl.max = hi; sl.step = 1; sl.value = M.win.from; sl.setAttribute("aria-label", "Óra kiválasztása");
+      const lb = document.createElement("span"); lb.className = "num"; lb.textContent = M.win.label;
+      sl.addEventListener("input", () => { mapTime.i = +sl.value; lb.textContent = fDate.format(new Date(S_.grid[mapTime.i])) + " " + fTime.format(new Date(S_.grid[mapTime.i])); clearTimeout(mapTime.tm); mapTime.tm = setTimeout(mapSection, 60); });
+      w.appendChild(sl); w.appendChild(lb); tc.appendChild(w);
+    }
+  }
 
   // színskála
   const arr = Object.values(vals).slice().sort((a, b) => a - b), q = (p) => arr[Math.min(arr.length - 1, Math.floor(arr.length * p))];
@@ -680,7 +741,7 @@ function mapSection(){
   const info = (z) => {
     let h = '<div class="t">' + esc(nm(z)) + '</div>';
     MAP_METRICS.forEach(m => { const v = M.v[m.k] && M.v[m.k][z]; if (!has(v)) return; h += row(m.k === mapMetric ? css("--ink2") : null, esc(m.n), m.f(v) + " " + m.u); });
-    const at = M.at && M.at[mapMetric + "|" + z]; if (at) h += '<div class="sub">' + (mapMetric === "price" || mapMetric === "diff" ? "" : "adat: ") + fDate.format(at) + ", " + fTime.format(at) + '</div>';
+    if (M.win && !["avg12", "neg12"].includes(mapMetric)) h += '<div class="sub">' + esc(M.win.label) + '</div>';
     return h;
   };
   if (GEO){
@@ -709,8 +770,8 @@ function mapSection(){
   });
   }
 
-  const at = (M.at && Object.keys(M.at).filter(k => k.startsWith(mapMetric + "|")).map(k => M.at[k])[0]);
-  $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + (at ? " Adat: " + fDate.format(at) + ", " + fTime.format(at) + "." : "") +
+  const at = null, winTxt = (M.win && !["avg12", "neg12"].includes(mapMetric)) ? " Időablak: " + M.win.label + "." : "";
+  $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + winTxt +
     " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna (vagy a kiválasztott ország). Norvégia, Svédország, Dánia és Olaszország ajánlati zónánként látszik (a zónahatárok közelítők, megyék/régiók alapján rajzoltuk). A csíkozott területekhez ehhez a mutatóhoz nincs érték a legutóbbi gyűjtésben. Nagyítás: +/− gombok, Ctrl + görgő, dupla kattintás vagy két ujjas csippentés; húzással mozgatható.";
   mapPanel(M, nm);
   const miss = !GEO ? [] : zoneList("s").filter(z => !has(vals[z])).map(z => nm(z));
@@ -867,6 +928,7 @@ function euSection(){
   let tiles = "";
   if (hu != null){
     tiles += tile("Magyar ár most", nf1.format(hu) + ' <small>€/MWh</small>', fTime.format(T[nowIdx]) + "–" + fTime.format(new Date(T[nowIdx].getTime() + 3600e3)));
+    { const w = Z.HU.slice(Math.max(0, nowIdx - 23), nowIdx + 1).filter(has); if (w.length >= 12) tiles += tile("Magyar ár, elmúlt 24 óra átlaga", nf1.format(w.reduce((x, y) => x + y, 0) / w.length) + ' <small>€/MWh</small>', "a „most” érték mellé, a napszak-torzítás elkerülésére"); }
     if (cur.DE_LU != null) tiles += tile("Különbség a német–luxemburgi zónához", signed(hu - cur.DE_LU, nf1) + ' <small>€/MWh</small>', "pozitív: a magyar ár magasabb");
     const same = live.filter(c => c !== "HU" && Math.abs(cur[c] - hu) < 0.01);
     tiles += tile("Azonos árú zóna a magyarral", same.length + ' <small>/ ' + (live.length - 1) + '</small>', same.length ? same.map(nm).join(", ") : "nincs ilyen zóna most");
