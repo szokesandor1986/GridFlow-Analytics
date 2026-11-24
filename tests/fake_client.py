@@ -77,7 +77,7 @@ def load_target(idx):
 
 
 ZONE_SCALE = {"AT": 1.1, "SK": 0.7, "RO": 1.3, "HR": 0.5, "SI": 0.3, "RS": 0.9, "CZ": 1.4, "DE_LU": 11.0, "PL": 3.2,
-              "BG": 0.8, "IT_NORD": 5.0, "FR": 9.0, "CH": 1.2, "NL": 2.5, "BE": 1.8, "ES": 4.5, "GR": 0.9}
+              "BG": 0.8, "IT_NORD": 5.0, "FR": 9.0, "CH": 1.2, "NL": 2.5, "BE": 1.8, "ES": 4.5, "GR": 0.9, "PT": 1.5}
 
 
 def zscale(zone):
@@ -146,7 +146,7 @@ class FakeClient:
         base = 95 + 12 * np.sin(day * 1.7)
         shape = 70 * np.exp(-((h - 19) ** 2) / 5) + 35 * np.exp(-((h - 8) ** 2) / 4) - 115 * np.exp(-((h - 13) ** 2) / 7)
         off = {"HU": 0, "AT": -7, "SK": 4, "RO": 14, "HR": 3, "SI": -2, "CZ": -6, "DE_LU": -16, "PL": 9, "BG": 13,
-               "IT_NORD": 15, "FR": -22, "CH": 5, "NL": -12, "BE": -14, "ES": -30, "GR": 16}[zone]
+               "IT_NORD": 15, "FR": -22, "CH": 5, "NL": -12, "BE": -14, "ES": -30, "GR": 16, "PT": -8}[zone]
         return pd.Series(base + shape + off, index=idx.tz_convert(BRU)).round(2)
 
     # ---------- menetrend és kapacitás

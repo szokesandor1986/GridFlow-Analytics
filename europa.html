@@ -421,7 +421,7 @@ function dragZoom(host, svg, W, Ht, x0, x1, y0, y1, n, off){
 
 // ---------------------------------------------------------------- térkép (négyzetrácsos kartogram)
 // (oszlop, sor) a rácson; a Nyugat–Kelet / Észak–Dél elrendezés közelítőleg földrajzi.
-const TILEPOS = {NL:[1,0], DE_LU:[2,0], PL:[3,0], FR:[0,1], BE:[1,1], CZ:[3,1], SK:[4,1], ES:[0,2], CH:[1,2], IT_NORD:[2,2], AT:[3,2], HU:[4,2], RO:[5,2],
+const TILEPOS = {NL:[1,0], DE_LU:[2,0], PL:[3,0], FR:[0,1], BE:[1,1], CZ:[3,1], SK:[4,1], ES:[0,2], PT:[0,3], CH:[1,2], IT_NORD:[2,2], AT:[3,2], HU:[4,2], RO:[5,2],
   SI:[3,3], HR:[4,3], RS:[5,3], GR:[4,4], BG:[5,4]};
 const TILECODE = {DE_LU:"DE", IT_NORD:"IT-N"};
 let GEO = null, MAPX = null, mapMetric = "price", mapPin = null;
@@ -533,6 +533,7 @@ function mapSection(){
     svg.style.maxWidth = "100%"; svg.style.margin = "0 auto"; svg.style.display = "block"; svg.style.overflow = "hidden";
     const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
     el("path", {d:GEO.ctx, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);
+    el("path", {d:GEO.zones.IT, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);     // Olaszország déli zónái: nincs adat
     const cid = el("clipPath", {id:"itN"}, el("defs", {}, svg)); el("rect", {x:0, y:0, width:GEO.W, height:GEO.itCut}, cid);
     const show = (z, ev) => { const r = svg.getBoundingClientRect(); tip.innerHTML = info(z); tip.style.display = "block"; const tw = tip.offsetWidth; let l = ev.clientX - r.left + 12; if (l + tw > host.clientWidth) l = Math.max(0, ev.clientX - r.left - tw - 12); tip.style.left = l + "px"; tip.style.top = Math.max(0, ev.clientY - r.top - 10) + "px"; };
     const zl = Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]);
@@ -584,7 +585,7 @@ function mapSection(){
 
   const at = (M.at && Object.keys(M.at).filter(k => k.startsWith(mapMetric + "|")).map(k => M.at[k])[0]);
   $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + (at ? " Adat: " + fDate.format(at) + ", " + fTime.format(at) + "." : "") +
-    " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna; a nem szereplő zónák (pl. Skandinávia, Brit-szigetek) ebben a kiadásban nincsenek a gyűjtésben.";
+    " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna; a szürke területek (pl. Olaszország déli zónái, Skandinávia, Baltikum, Brit-szigetek, Ukrajna és a Nyugat-Balkán nagy része) ebben a kiadásban nincsenek a gyűjtésben ebben a kiadásban nincsenek a gyűjtésben.";
 }
 async function loadMapExtra(){
   const demo = new URLSearchParams(location.search).get("demo");
@@ -616,6 +617,7 @@ function fmapSection(){
   svg.style.maxWidth = "100%"; svg.style.margin = "0 auto"; svg.style.display = "block"; svg.style.overflow = "hidden";
   const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
   el("path", {d:GEO.ctx, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);
+  el("path", {d:GEO.zones.IT, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);
   const cid = el("clipPath", {id:"itN2"}, el("defs", {}, svg)); el("rect", {x:0, y:0, width:GEO.W, height:GEO.itCut}, cid);
   const col = (z) => { const v = net[z]; if (!has(v)) return null; return v > 0 ? mixRgb(neutral, exp, Math.min(1, v / mx)) : mixRgb(neutral, imp, Math.min(1, -v / mx)); };
   const zinfo = (z) => '<div class="t">' + esc(nm(z)) + '</div>' + (has(net[z]) ? row(null, net[z] > 0 ? "Nettó export" : "Nettó import", nf0.format(Math.abs(net[z])) + " MW") : "<div>Nincs adat</div>") +

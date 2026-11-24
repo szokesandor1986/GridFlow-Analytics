@@ -47,7 +47,7 @@ EUROPE_ZONES = {
     "HU": "Magyarország", "AT": "Ausztria", "SK": "Szlovákia", "RO": "Románia", "HR": "Horvátország",
     "SI": "Szlovénia", "RS": "Szerbia", "CZ": "Csehország", "DE_LU": "Németország–Luxemburg",
     "PL": "Lengyelország", "BG": "Bulgária", "IT_NORD": "Észak-Olaszország", "FR": "Franciaország",
-    "CH": "Svájc", "NL": "Hollandia", "BE": "Belgium", "ES": "Spanyolország", "GR": "Görögország",
+    "CH": "Svájc", "NL": "Hollandia", "BE": "Belgium", "ES": "Spanyolország", "GR": "Görögország", "PT": "Portugália",
 }
 # Határonkénti nap előtti NTC csak a nem-Core határokon van (a Core-határokon flow-based kapacitás-kiosztás van,
 # ott nincs NTC, a lekérdezés felesleges és lassú). A magyar Core-határok: AT, SK, RO, HR, SI.
@@ -707,7 +707,7 @@ EUROPE_PAIRS = [
     ("AT", "DE_LU"), ("AT", "CZ"), ("AT", "SI"), ("AT", "CH"), ("AT", "IT_NORD"),
     ("SK", "CZ"), ("SK", "PL"), ("RO", "BG"), ("RO", "RS"), ("HR", "SI"), ("HR", "RS"), ("SI", "IT_NORD"),
     ("RS", "BG"), ("BG", "GR"), ("CZ", "DE_LU"), ("CZ", "PL"), ("DE_LU", "PL"), ("DE_LU", "FR"),
-    ("DE_LU", "NL"), ("DE_LU", "BE"), ("DE_LU", "CH"), ("FR", "BE"), ("FR", "CH"), ("FR", "ES"),
+    ("DE_LU", "NL"), ("DE_LU", "BE"), ("DE_LU", "CH"), ("FR", "BE"), ("ES", "PT"), ("FR", "CH"), ("FR", "ES"),
     ("FR", "IT_NORD"), ("CH", "IT_NORD"), ("NL", "BE"),
 ]
 
