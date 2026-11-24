@@ -38,6 +38,7 @@ jobs:
         run: |
           python -I tests/test_collector.py
           python -I tests/test_freq.py
+          python -I tests/test_hupx.py
 
       # A gáz- és a hosszú távú adat a "data" ágon él (a gyűjtő workflow-k oda mentenek); ha még nincs, a main példánya marad.
       - name: Tárolt adatok betöltése (data ág)
@@ -49,7 +50,7 @@ jobs:
         run: |
           mkdir -p dist
           python collector.py --out dist/data.json
-          cp index.html muszaki.html europa.html foldgaz.html demo-data.json demo-engineer.json demo-europe.json demo-countries.json demo-history.json demo-gas.json demo-frequency.json dist/
+          cp index.html muszaki.html europa.html foldgaz.html europe-geo.json demo-data.json demo-engineer.json demo-europe.json demo-countries.json demo-history.json demo-gas.json demo-frequency.json demo-hupx.json dist/
           cp history.json gas.json dist/ 2>/dev/null || true
 
       # Hálózati frekvencia (Energy-Charts, kulcs nélkül). Az előző állapotot (napi összesítések) az élő oldalról
@@ -61,6 +62,15 @@ jobs:
           mkdir -p dist
           curl -fsS --max-time 30 "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/frequency.json" -o dist/frequency.json || rm -f dist/frequency.json
           python freq.py --out dist/frequency.json --max-fetch 3
+
+      # REMIT-kiesések a HUPX Inside Information Platformról (kulcs: HUPX_KEY secret). Kulcs vagy hiba esetén a
+      # kártya egyszerűen nem jelenik meg, a közzététel megtörténik.
+      - name: HUPX kiesések (REMIT)
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          HUPX_KEY: ${{ secrets.HUPX_KEY }}
+        run: python hupx.py --out dist/hupx.json
 
       - uses: actions/upload-pages-artifact@v5
         with:
