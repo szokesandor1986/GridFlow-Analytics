@@ -111,6 +111,7 @@ text{font-family:inherit}
     <div id="mapPanel"></div>
     <div class="legend" id="mapLegend" style="margin-top:10px"></div>
     <p class="note" id="mapNote"></p>
+    <div id="mapMiss"></div>
   </section>
   <section class="card" id="cFmap" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), zónapáronként; a zóna nettó pozíciója a térképen szereplő határok összege, saját számítás" style="display:none">
     <h2>Európai áramlási térkép</h2>
@@ -708,6 +709,10 @@ function mapSection(){
   $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + (at ? " Adat: " + fDate.format(at) + ", " + fTime.format(at) + "." : "") +
     " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna (vagy a kiválasztott ország). A szürke területek nincsenek az ENTSO-E adatai között, vagy az adott mutatóra nincs közölt érték. Nagyítás: +/− gombok, Ctrl + görgő, dupla kattintás vagy két ujjas csippentés; húzással mozgatható.";
   mapPanel(M, nm);
+  const miss = !GEO ? [] : Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]).filter(z => !has(vals[z])).map(z => nm(z));
+  const mm = $("mapMiss"), ml = ((EU && EU.missing) || []).slice(0, 80);
+  if (mm) mm.innerHTML = (miss.length ? '<p class="note"><b>Nincs adat ehhez a mutatóhoz:</b> ' + esc(miss.join(", ")) + '. Ezekre az ENTSO-E nem közöl adatot, vagy a legutóbbi gyűjtésben nem érkezett meg; az Egyesült Királyság a Brexit óta nem szerepel az ENTSO-E átláthatósági adataiban.</p>' : "") +
+    (ml.length ? '<details class="note"><summary>Hiányzó lekérdezések az utolsó gyűjtésből (' + ml.length + ')</summary>' + esc(ml.join("; ")) + '</details>' : "");
 }
 async function loadMapExtra(){
   const demo = new URLSearchParams(location.search).get("demo");

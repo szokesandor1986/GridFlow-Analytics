@@ -348,6 +348,7 @@ function chips(){
 // ---------- Magyarország és szomszédai: valódi határok, vékony nyilak, olvasható értékek (hu-geo.json)
 // rows: [{code, name, net (+ = Magyarország felé, − = kifelé, null = nincs adat), sub (második sor), tint (-1..1: a szomszéd színe), tip (html)}]
 // o: {unit, fmt, impVar, expVar, tintLo, tintHi, center:[cím, alcím], maxv}
+const lines0 = (r) => 1 + (r.sub ? 1 : 0) + (r.sub2 ? 1 : 0);
 function huFlowMap(host, G, rows, o){
   host.innerHTML = "";
   const cw = host.clientWidth, W = Math.min(Math.max(cw, 600), 780), k = G.W / W, narrow = false, fs = 12 * k;
@@ -370,27 +371,28 @@ function huFlowMap(host, G, rows, o){
   rows.forEach(r => {
     const g = G.border[r.code]; if (!g) return;
     let ux = g.inn[0] - g.out[0], uy = g.inn[1] - g.out[1]; const ul = Math.hypot(ux, uy); ux /= ul; uy /= ul;      // a Magyarország felé mutató egységvektor
-    const L = (narrow ? 104 : 118) * 1, cx = g.b[0], cy = g.b[1];
+    const L = 66, cx = g.b[0], cy = g.b[1];
     const a = [cx - ux * L / 2, cy - uy * L / 2], z = [cx + ux * L / 2, cy + uy * L / 2];        // a = külső vég, z = belső vég
     const grp = el("g", {}, svg);
     if (r.net == null){
       el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:ink2, "stroke-width":1.2 * k, "stroke-dasharray":(3 * k) + " " + (4 * k), opacity:.6}, grp);
     } else {
-      const f = Math.min(1, Math.abs(r.net) / maxv), w = (1.1 + 2.6 * f) * k, col = r.net >= 0 ? imp : exp;
+      const f = Math.min(1, Math.abs(r.net) / maxv), w = (2.6 + 4.2 * f) * k, col = r.net >= 0 ? imp : exp;
       const from = r.net >= 0 ? a : z, to = r.net >= 0 ? z : a, dx = to[0] - from[0], dy = to[1] - from[1], dl = Math.hypot(dx, dy), vx = dx / dl, vy = dy / dl;
-      const hl = (7 + 2.5 * f) * k, hw = (3.2 + 1.6 * f) * k, ex = to[0] - vx * hl, ey = to[1] - vy * hl;
+      const hl = (12 + 4 * f) * k, hw = (6.5 + 2.5 * f) * k, ex = to[0] - vx * hl, ey = to[1] - vy * hl;
       el("line", {x1:from[0], y1:from[1], x2:ex, y2:ey, stroke:col, "stroke-width":w, "stroke-linecap":"round"}, grp);
       el("polygon", {points:[to[0], to[1], ex - vy * hw, ey + vx * hw, ex + vy * hw, ey - vx * hw].join(","), fill:col}, grp);
     }
     el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:"transparent", "stroke-width":16 * k}, grp);
     if (r.tip){ grp.addEventListener("pointermove", ev => place(ev, r.tip)); grp.addEventListener("pointerleave", () => { tip.style.display = "none"; }); }
     // felirat: a külső vég mögött, az irányhoz igazítva, háttér-körvonallal (nem folyik egybe a térképpel)
-    const lx = a[0] - ux * 9 * k, ly = a[1] - uy * 9 * k, anc = ux > .4 ? "end" : ux < -.4 ? "start" : "middle";
-    const yy = uy > .4 ? ly - fs * 1.9 : uy < -.4 ? ly + fs * 1.05 : ly - fs * .55;
+    const lx = a[0] - ux * 12 * k, ly = a[1] - uy * 12 * k, anc = ux > .4 ? "end" : ux < -.4 ? "start" : "middle";
+    const yy = uy > .4 ? ly - fs * (lines0(r) * 1.2 + .5) : uy < -.4 ? ly + fs * 1.05 : ly - fs * .55;
     const lines = [[r.name, 700, ink], [r.net == null ? "nincs adat" : (r.net >= 0 ? "import " : "export ") + o.fmt.format(Math.abs(r.net)) + " " + o.unit, 600, r.net == null ? ink2 : (r.net >= 0 ? imp : exp)]];
     if (r.sub) lines.push([r.sub, 400, ink2]);
+    if (r.sub2) lines.push([r.sub2, 400, ink2]);
     const ts = [];
-    lines.forEach(([txt, wt, c], j) => { const t = el("text", {x:lx, y:yy + j * fs * 1.2, "text-anchor":anc, "font-size":fs * (j === 2 ? .92 : 1), "font-weight":wt, fill:c, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "stroke-linejoin":"round", "pointer-events":"none"}, svg); t.textContent = txt; ts.push(t); });
+    lines.forEach(([txt, wt, c], j) => { const t = el("text", {x:lx, y:yy + j * fs * 1.2, "text-anchor":anc, "font-size":fs * (j >= 2 ? .92 : 1), "font-weight":wt, fill:c, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "stroke-linejoin":"round", "pointer-events":"none"}, svg); t.textContent = txt; ts.push(t); });
     // a felirat maradjon a rajzterületen belül
     const bb = ts.map(t => t.getBBox()), x0 = Math.min(...bb.map(b => b.x)), x1 = Math.max(...bb.map(b => b.x + b.width)), pad = 6 * k;
     const sh = x0 < pad ? pad - x0 : (x1 > G.W - pad ? (G.W - pad) - x1 : 0);
@@ -423,9 +425,12 @@ function mapCard(){
   const rows = D.borders.map(b => {
     const imp = b.import_mw[i], exp = b.export_mw[i], has = imp != null || exp != null, net = has ? (imp || 0) - (exp || 0) : null;
     const zp = D.prices.zones[b.code], price = (zp && M.pIdx >= 0) ? zp[M.pIdx] : null, spread = (price != null && hp != null) ? price - hp : null;
-    return {code:b.code, name:b.name, net, sub:price == null ? "" : nf1.format(price) + " €/MWh" + (spread == null ? "" : " (" + signed(spread, nf1) + ")"),
+    let sum = 0, cn = 0, mxi = 0, mxe = 0;
+    for (let j = Math.max(0, i - 23); j <= i; j++){ const a_ = b.import_mw[j], e_ = b.export_mw[j]; if (a_ == null && e_ == null) continue; sum += (a_ || 0) - (e_ || 0); cn++; mxi = Math.max(mxi, a_ || 0); mxe = Math.max(mxe, e_ || 0); }
+    const avg = cn ? sum / cn : null;
+    return {code:b.code, name:b.name, net, sub2:avg == null ? "" : "24 ó átlag: " + (avg >= 0 ? "import " : "export ") + nf0.format(Math.abs(avg)) + " MW", sub:price == null ? "" : nf1.format(price) + " €/MWh" + (spread == null ? "" : " (" + signed(spread, nf1) + ")"),
       tint:spread == null ? null : spread / 60,
-      tip:'<div class="t">' + esc(b.name) + '</div>' + (has ? row("var(--imp)", "Import", nf0.format(imp || 0) + " MW") + row("var(--exp)", "Export", nf0.format(exp || 0) + " MW") + row("var(--ink2)", "Nettó", signed(net) + " MW") : "<div>Nincs adat</div>") +
+      tip:'<div class="t">' + esc(b.name) + '</div>' + (has ? row("var(--imp)", "Import", nf0.format(imp || 0) + " MW") + row("var(--exp)", "Export", nf0.format(exp || 0) + " MW") + row("var(--ink2)", "Nettó", signed(net) + " MW") + (cn ? row("var(--muted)", "24 óra: átlag nettó", signed(avg) + " MW") + row("var(--muted)", "24 óra: legnagyobb import", nf0.format(mxi) + " MW") + row("var(--muted)", "24 óra: legnagyobb export", nf0.format(mxe) + " MW") : "") : "<div>Nincs adat</div>") +
         (price == null ? "" : row("var(--muted)", "Day-ahead ár", nf1.format(price) + " €/MWh") + (spread == null ? "" : row("var(--muted)", "Különbség HU-hoz", signed(spread, nf1) + " €/MWh")))};
   });
   const net = D.net_import_mw[i];
