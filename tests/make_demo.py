@@ -105,3 +105,14 @@ hj["demo"] = True
 hj["source"] = "DEMO – szintetikus adat, nem valós közlemény"
 (ROOT / "demo-hupx.json").write_text(json.dumps(hj, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 print("hupx: kiesések", hj["count"], "| hibák", hj["errors"])
+
+# ---- időjárás (Open-Meteo formátumú, kitalált)
+wspec = importlib.util.spec_from_file_location("weather", ROOT / "weather.py")
+wx = importlib.util.module_from_spec(wspec)
+wspec.loader.exec_module(wx)
+from fake_weather_client import FakeOpenMeteo  # noqa: E402
+wd = wx.collect(FakeOpenMeteo(pd.Timestamp("2026-11-23 12:20", tz="UTC").to_pydatetime()), now=pd.Timestamp("2026-11-23 12:20", tz="UTC").to_pydatetime())
+wd["demo"] = True
+wd["source"] = "DEMO – szintetikus adat, nem valós időjárás"
+wx.write_json(str(ROOT / "demo-weather.json"), wd)
+print("időjárás: helyek", len(wd["places"]), "| hibák", wd["errors"])

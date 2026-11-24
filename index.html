@@ -100,17 +100,28 @@ nav.tabs a[aria-current="page"]{color:var(--ink);border-color:var(--ink2);font-w
 .mapwrap svg{display:block;width:100%;height:auto;overflow:visible}
 .card[data-src]::after{content:"Forrás: " attr(data-src);display:block;margin-top:14px;padding-top:8px;border-top:1px solid var(--grid);color:var(--muted);font-size:12px;line-height:1.4}
 text{font-family:inherit}
+
+.intro{padding:0}.intro summary{cursor:pointer;padding:14px 18px;font-weight:650;font-size:16px;list-style:none}
+.intro summary::-webkit-details-marker{display:none}.intro summary::before{content:"▸ ";color:var(--ink2)}.intro[open] summary::before{content:"▾ "}
+.intro .body{padding:0 18px 16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px 22px}
+.intro h3{font-size:13.5px;margin:0 0 4px;color:var(--ink2);font-weight:650;text-transform:none}
+.intro p{margin:0;font-size:14.5px}
+.intro .how{grid-column:1/-1;color:var(--ink2);font-size:13.5px;border-top:1px solid var(--grid);padding-top:10px}
+.status{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:10px;color:var(--muted);font-size:13px}
+.status b{color:var(--ink2);font-weight:600}.status .lag{color:var(--ink2)}
 </style>
 </head>
 <body>
 <main>
-  <nav class="tabs" aria-label="Nézetek"><a href="index.html" aria-current="page">Áttekintés</a><a href="muszaki.html">Mérnöki nézet</a><a href="europa.html">Európa és trendek</a><a href="foldgaz.html">Földgáz</a></nav>
+  <nav class="tabs" aria-label="Nézetek"><a href="index.html" aria-current="page">Határok</a><a href="muszaki.html">Rendszerállapot</a><a href="europa.html">Európai piac</a><a href="idojaras.html">Időjárás</a><a href="foldgaz.html">Földgáz</a></nav>
   <div id="banners"></div>
   <header>
     <h1>Határkeresztező villamosenergia-áramlás</h1>
     <p class="sub">Mennyi villamos energia áramlik be Magyarországra és ki onnan a szomszédos rendszerirányítók mérései szerint, és mennyi a day-ahead zónaár.</p>
     <div class="meta" id="meta"></div>
   </header>
+
+  <details class="card intro" id="intro"></details>
 
   <section class="card" id="heroCard" data-src="ENTSO-E Transparency Platform (day-ahead árak 12.1.D, fizikai határkeresztező áramlás 12.1.G)" aria-live="polite"></section>
 
@@ -235,7 +246,7 @@ function model(){
 
 // ---------- megjelenítés
 function render(){
-  banners(); meta(); hero(); borders(); chips(); winChips(); renderCharts(); foot();
+  banners(); meta(); intro(); hero(); borders(); chips(); winChips(); renderCharts(); foot();
 }
 function renderCharts(){ mapCard(); netChart(); priceChart(); }
 function winChips(){
@@ -275,8 +286,35 @@ function banners(){
   $("banners").innerHTML = b.join("");
 }
 function meta(){
-  const g = new Date(D.generated_utc);
-  $("meta").innerHTML = '<span>Adatgyűjtés: ' + fFull.format(g) + ' (helyi idő)</span><span>Forrás: ' + esc(D.source) + '</span>';
+  const g = new Date(D.generated_utc), age = Math.max(0, Math.round((NOW - g) / 6e4));
+  const ageTxt = age < 90 ? age + " perce" : nf0.format(age / 60) + " órája";
+  const parts = ['<span><b>Adatgyűjtés:</b> ' + fFull.format(g) + ' (' + ageTxt + ')</span>'];
+  if (M && M.lastIdx >= 0) parts.push('<span><b>Legfrissebb teljes mérési óra:</b> ' + fDate.format(M.T[M.lastIdx]) + ' ' + fTime.format(M.T[M.lastIdx]) + '–' + fTime.format(new Date(M.T[M.lastIdx].getTime() + 3600e3)) + '</span>');
+  const lasts = D.borders.map(b => b.last_ts ? +new Date(b.last_ts) : 0), latest = Math.max(0, ...lasts);
+  const lag = D.borders.filter((b, k) => lasts[k] && lasts[k] < latest).map(b => b.name || b.code), none = D.borders.filter((b, k) => !lasts[k]).map(b => b.name || b.code);
+  if (lag.length) parts.push('<span class="lag">Késő határ: ' + esc(lag.join(", ")) + ' (a legfrissebb óra még hiányos, ez nem nulla áramlás)</span>');
+  if (none.length) parts.push('<span class="lag">Nincs adat: ' + esc(none.join(", ")) + '</span>');
+  parts.push('<span>Forrás: ' + esc(D.source) + ' (nem valós idejű)</span>');
+  $("meta").className = "status"; $("meta").innerHTML = parts.join("");
+}
+function intro(){
+  const box = $("intro"); if (!box || M.lastIdx < 0) { if (box) box.style.display = "none"; return; }
+  const i = M.lastIdx, net = D.net_import_mw[i];
+  const per = D.borders.map(b => ({n:b.name || b.code, v:(b.import_mw[i] || 0) - (b.export_mw[i] || 0)}));
+  const topI = per.slice().sort((a, b) => b.v - a.v)[0], topE = per.slice().sort((a, b) => a.v - b.v)[0];
+  const lo = Math.max(0, M.lastIdx - 23), sl = D.net_import_mw.slice(lo, M.lastIdx + 1).filter(v => v != null), avg = sl.length ? sl.reduce((x, y) => x + y, 0) / sl.length : null;
+  const zp = D.prices.zones, j = M.pIdx, huP = zp.HU && j >= 0 ? zp.HU[j] : null;
+  let priceTxt = "A day-ahead ár nem érhető el.";
+  if (huP != null){
+    const others = Object.keys(zp).filter(z => z !== "HU" && zp[z][j] != null).map(z => ({z, v:zp[z][j], n:(D.borders.find(b => b.code === z) || {}).name || z})).sort((a, b) => a.v - b.v);
+    priceTxt = 'A magyar day-ahead ár most <b>' + nf1.format(huP) + ' €/MWh</b>.' + (others.length ? ' A szomszédok közül a legolcsóbb ' + esc(others[0].n) + ' (' + nf1.format(others[0].v) + '), a legdrágább ' + esc(others[others.length - 1].n) + ' (' + nf1.format(others[others.length - 1].v) + ').' : "");
+  }
+  box.innerHTML = '<summary>Mit látok? Röviden</summary><div class="body">' +
+    '<div><h3>Az irány</h3><p>Magyarország a legutóbbi teljes órában <b>' + nf0.format(Math.abs(net)) + ' MW nettó ' + (net >= 0 ? "importot" : "exportot") + '</b> mutat' + (avg == null ? "" : '; az utolsó 24 óra átlaga ' + signed(avg) + ' MW (+ import, − export)') + '.</p></div>' +
+    '<div><h3>A határok</h3><p>' + (topI && topI.v > 0 ? 'Legnagyobb import: <b>' + esc(topI.n) + '</b> (' + nf0.format(topI.v) + ' MW). ' : '') + (topE && topE.v < 0 ? 'Legnagyobb export: <b>' + esc(topE.n) + '</b> (' + nf0.format(-topE.v) + ' MW).' : '') + '</p></div>' +
+    '<div><h3>Az ár</h3><p>' + priceTxt + '</p></div>' +
+    '<div class="how">Hogyan olvasd: a kék nyíl import Magyarországra, a piros export. Az adatok az ENTSO-E átláthatósági platformról jönnek, ezért órákat késhetnek; egy hiányos óra nem nulla érték, a háttérben még nem érkezett meg az adat. A <b>Rendszerállapot</b> fül a hálózati frekvenciát, a termelést és a kiesést mutatja, az <b>Európai piac</b> az árakat és zónákat, az <b>Időjárás</b> a szél-, nap- és csapadékelőrejelzést, a <b>Földgáz</b> a tárolókat és az LNG-t.</div></div>';
+  if (!box.dataset.init){ box.dataset.init = "1"; box.open = window.innerWidth >= 760; }
 }
 
 function hero(){
