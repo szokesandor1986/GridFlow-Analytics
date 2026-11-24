@@ -130,6 +130,10 @@ text{font-family:inherit}
     <h2>Határpontok: honnan érkezik a gáz?</h2>
     <p class="hint">A magyar határpontok fizikai gázáramlása (ENTSOG, a magyar szállítási rendszerirányító oldaláról). A pozitív érték a Magyarországra érkező, a negatív a Magyarországról kilépő gáz, országonként összesítve.</p>
     <div class="tiles" id="gz_flowTiles"></div>
+    <h3>Térkép: áramlás a határokon egy kiválasztott napon</h3>
+    <div class="chips" style="align-items:center"><label for="gz_mapSlider" style="font-size:13.5px;color:var(--ink2)">Nap:</label><input type="range" id="gz_mapSlider" min="0" max="0" step="1" style="flex:1;min-width:160px;max-width:520px"><b id="gz_mapLabel" class="num" style="font-size:13.5px"></b></div>
+    <div class="mapwrap" id="gz_flowMap" style="position:relative;width:100%" role="img" aria-label="Magyarország és szomszédai: földgázáramlás a határpontokon"></div>
+    <div class="legend" id="gz_mapLegend" style="margin-top:10px"></div>
     <h3>Nettó áramlás országonként, napi, GWh/nap</h3>
     <div class="legend" id="gz_flowLegend"></div>
     <div class="chart" id="gz_flowChart"></div>
@@ -249,7 +253,7 @@ const dayLabel = (s) => fDayY.format(ud(s));
     const tot = WDt.length, N = Math.min(gasN || 150, tot), e = tot - gasBack, a = Math.max(0, e - N);
     let html = '<div class="chips" role="group" aria-label="Időablak">' + PRE.map(([l, k]) => '<button class="chip" type="button" data-k="' + k + '" aria-pressed="' + ((gasN || 0) === k || (k === 99999 && gasN >= tot)) + '">' + l + '</button>').join("") +
       '<button class="chip" type="button" data-s="-1" ' + (a === 0 ? "disabled" : "") + ' aria-label="Korábbra">◀</button><button class="chip" type="button" data-s="1" ' + (gasBack === 0 ? "disabled" : "") + ' aria-label="Későbbre">▶</button></div>' +
-      '<div class="winlabel">Időablak a napi grafikonokhoz (betáplálás és kivétel, határpontok, rendelkezésre álló gáz, LNG): <b>' + dayLabel(WDt[a]) + ' – ' + dayLabel(WDt[Math.max(a, e - 1)]) + '</b> (' + (e - a) + ' nap). A gázéves összevetés mindig a teljes gázévet mutatja.<span class="hide-sm"> · Egérrel húzd végig a kívánt szakaszt egy napi grafikonon a nagyításhoz, dupla kattintással vissza.</span></div>';
+      '<div class="winlabel">Időablak a napi grafikonokhoz (betáplálás és kivétel, határpontok, rendelkezésre álló gáz, LNG): <b>' + dayLabel(WDt[a]) + ' – ' + dayLabel(WDt[Math.max(a, e - 1)]) + '</b> (' + (e - a) + ' nap). A gázéves összevetés 1 évnél rövidebb ablaknál a mai naphoz tartozó szakaszt mutatja (az ablak hosszával előre és hátra), egy évtől a teljes gázévet.<span class="hide-sm"> · Egérrel húzd végig a kívánt szakaszt egy napi grafikonon a nagyításhoz, dupla kattintással vissza.</span></div>';
     host.innerHTML = html;
     host.querySelectorAll("[data-k]").forEach(b => b.addEventListener("click", () => { gasN = +b.dataset.k; gasBack = 0; render(); }));
     host.querySelectorAll("[data-s]").forEach(b => b.addEventListener("click", () => { const w = e - a, st = Math.max(1, Math.round(w / 2)) * +b.dataset.s; gasBack = Math.max(0, Math.min(tot - w, gasBack - st)); render(); }));
@@ -488,8 +492,21 @@ function seasonSection(){
   legend("gz_seasonLegend", series.map(x => ({label:x.label, color:x.color, kind:x.dash ? "dash" : "line", w:x.w})));
   const ref = new Date(Date.UTC(2023, 9, 1)), ticks = [];
   for (let k = 0; k < 12; k++){ const d = new Date(Date.UTC(2023, 9 + k, 1)); ticks.push({i:Math.round((d - ref) / 864e5), label:MONTHS[d.getUTCMonth()].slice(0, 3) + "."}); }
-  dchart(host, {n:366, series, unit:"%", fmt:nf1.format, yMin:0, yMax:100, ticks, height:320,
-    title:i => "Gázév napja: " + fDayU.format(new Date(ref.getTime() + i * 864e5))});
+  // időablak: 1 évnél rövidebb ablaknál a mai naphoz tartozó szakaszt mutatjuk (± az ablak hossza), minden gázévre
+  let x0 = 0, x1 = 366;
+  const NW = gasN || 150;
+  if (NW < 365){
+    const c = Math.max(0, Math.min(365, gyIndex(A.dates[li]) - gasBack));
+    x0 = Math.max(0, c - NW); x1 = Math.min(366, c + NW + 1);
+    if (x1 - x0 < 30){ x0 = Math.max(0, x1 - 30); x1 = Math.min(366, x0 + 30); }
+  }
+  const cut = (a) => a.slice(x0, x1), mid = (x0 + x1) / 2;
+  const sTicks = [];
+  const stepD = (x1 - x0) <= 70 ? 7 : (x1 - x0) <= 200 ? 14 : 0;
+  if (stepD){ for (let i = x0; i < x1; i += stepD){ const d = new Date(ref.getTime() + i * 864e5); sTicks.push({i:i - x0, label:d.getUTCDate() + " " + MONTHS[d.getUTCMonth()].slice(0, 3) + "."}); } }
+  else ticks.forEach(t => { if (t.i >= x0 && t.i < x1) sTicks.push({i:t.i - x0, label:t.label}); });
+  dchart(host, {n:x1 - x0, series:series.map(q => Object.assign({}, q, {values:cut(q.values)})), unit:"%", fmt:nf1.format, yMin:0, yMax:100, ticks:sTicks, height:320,
+    title:i => "Gázév napja: " + fDayU.format(new Date(ref.getTime() + (i + x0) * 864e5))});
   $("gz_seasonNote").textContent = AREAS[area] + ": a töltöttség a munkagáz-kapacitás százalékában. A legutóbbi érték: " + nf1.format(s.full[li]) + " % (" + dayLabel(A.dates[li]) + "). A szaggatott vonal a korábbi gázévek átlaga.";
 }
 
@@ -548,6 +565,82 @@ function flowModel(){
 }
 const avgRange = (arr, end, k) => { const v = arr.slice(Math.max(0, end - k + 1), end + 1).filter(has); return v.length >= Math.ceil(k / 2) ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 
+// ---------- Magyarország és szomszédai: valódi határok, vékony nyilak, olvasható értékek (hu-geo.json)
+// rows: [{code, name, net (+ = Magyarország felé, − = kifelé, null = nincs adat), sub (második sor), tint (-1..1: a szomszéd színe), tip (html)}]
+// o: {unit, fmt, impVar, expVar, tintLo, tintHi, center:[cím, alcím], maxv}
+function huFlowMap(host, G, rows, o){
+  host.innerHTML = "";
+  const W = Math.min(Math.max(300, host.clientWidth), 780), k = G.W / W, narrow = W < 520, fs = (narrow ? 12.5 : 12) * k;
+  const svg = el("svg", {viewBox:"0 0 " + G.W + " " + G.H, width:W, height:W * G.H / G.W, role:"img", "aria-label":o.aria || "Magyarország és szomszédai"}, host);
+  svg.style.maxWidth = "100%"; svg.style.display = "block"; svg.style.margin = "0 auto"; svg.style.overflow = "hidden";
+  const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
+  const ink = css("--ink"), ink2 = css("--ink2"), surf = css("--surface"), imp = css(o.impVar), exp = css(o.expVar);
+  const place = (ev, html) => { const r = svg.getBoundingClientRect(); tip.innerHTML = html; tip.style.display = "block"; const tw = tip.offsetWidth; let l = ev.clientX - r.left + 12; if (l + tw > host.clientWidth) l = Math.max(0, ev.clientX - r.left - tw - 12); tip.style.left = l + "px"; tip.style.top = Math.max(0, ev.clientY - r.top - 10) + "px"; };
+  el("path", {d:G.ctx, fill:css("--neutral"), stroke:surf, "stroke-width":.8 * k}, svg).setAttribute("opacity", ".7");
+  const byCode = {}; rows.forEach(r => byCode[r.code] = r);
+  Object.keys(G.zones).forEach(z => {
+    const r = byCode[z], p = el("path", {d:G.zones[z], stroke:z === "HU" ? ink : surf, "stroke-width":(z === "HU" ? 2 : 1) * k, "stroke-linejoin":"round"}, svg);
+    let fill = z === "HU" ? "color-mix(in srgb, " + css(o.huVar || "--neutral") + " 9%, " + surf + ")" : css("--neutral");
+    if (r && r.tint != null && z !== "HU"){ const t = Math.max(-1, Math.min(1, r.tint)), a = Math.round(Math.abs(t) * 70); fill = "color-mix(in srgb, " + css(t < 0 ? o.tintLo : o.tintHi) + " " + a + "%, " + css("--neutral") + ")"; }
+    p.style.fill = fill;
+    if (r && r.tip){ p.addEventListener("pointermove", ev => place(ev, r.tip)); p.addEventListener("pointerleave", () => { tip.style.display = "none"; }); }
+  });
+  const maxv = o.maxv || Math.max(1, ...rows.map(r => r.net == null ? 0 : Math.abs(r.net)));
+  rows.forEach(r => {
+    const g = G.border[r.code]; if (!g) return;
+    let ux = g.inn[0] - g.out[0], uy = g.inn[1] - g.out[1]; const ul = Math.hypot(ux, uy); ux /= ul; uy /= ul;      // a Magyarország felé mutató egységvektor
+    const L = (narrow ? 104 : 118) * 1, cx = g.b[0], cy = g.b[1];
+    const a = [cx - ux * L / 2, cy - uy * L / 2], z = [cx + ux * L / 2, cy + uy * L / 2];        // a = külső vég, z = belső vég
+    const grp = el("g", {}, svg);
+    if (r.net == null){
+      el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:ink2, "stroke-width":1.2 * k, "stroke-dasharray":(3 * k) + " " + (4 * k), opacity:.6}, grp);
+    } else {
+      const f = Math.min(1, Math.abs(r.net) / maxv), w = (1.1 + 2.6 * f) * k, col = r.net >= 0 ? imp : exp;
+      const from = r.net >= 0 ? a : z, to = r.net >= 0 ? z : a, dx = to[0] - from[0], dy = to[1] - from[1], dl = Math.hypot(dx, dy), vx = dx / dl, vy = dy / dl;
+      const hl = (7 + 2.5 * f) * k, hw = (3.2 + 1.6 * f) * k, ex = to[0] - vx * hl, ey = to[1] - vy * hl;
+      el("line", {x1:from[0], y1:from[1], x2:ex, y2:ey, stroke:col, "stroke-width":w, "stroke-linecap":"round"}, grp);
+      el("polygon", {points:[to[0], to[1], ex - vy * hw, ey + vx * hw, ex + vy * hw, ey - vx * hw].join(","), fill:col}, grp);
+    }
+    el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:"transparent", "stroke-width":16 * k}, grp);
+    if (r.tip){ grp.addEventListener("pointermove", ev => place(ev, r.tip)); grp.addEventListener("pointerleave", () => { tip.style.display = "none"; }); }
+    // felirat: a külső vég mögött, az irányhoz igazítva, háttér-körvonallal (nem folyik egybe a térképpel)
+    const lx = a[0] - ux * 9 * k, ly = a[1] - uy * 9 * k, anc = ux > .4 ? "end" : ux < -.4 ? "start" : "middle";
+    const yy = uy > .4 ? ly - fs * 1.9 : uy < -.4 ? ly + fs * 1.05 : ly - fs * .55;
+    const lines = [[r.name, 700, ink], [r.net == null ? "nincs adat" : signed(r.net, o.fmt) + " " + o.unit, 600, r.net == null ? ink2 : (r.net >= 0 ? imp : exp)]];
+    if (r.sub) lines.push([r.sub, 400, ink2]);
+    lines.forEach(([txt, wt, c], j) => { const t = el("text", {x:lx, y:yy + j * fs * 1.2, "text-anchor":anc, "font-size":fs * (j === 2 ? .92 : 1), "font-weight":wt, fill:c, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "stroke-linejoin":"round", "pointer-events":"none"}, svg); t.textContent = txt; });
+  });
+  const hc = G.labels.HU;
+  if (o.center){ const t1 = el("text", {x:hc[0], y:hc[1], "text-anchor":"middle", "font-size":fs * 1.15, "font-weight":700, fill:ink, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t1.textContent = o.center[0];
+    const t2 = el("text", {x:hc[0], y:hc[1] + fs * 1.3, "text-anchor":"middle", "font-size":fs, fill:ink2, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t2.textContent = o.center[1]; }
+  const bp = G.cities.Budapest; el("circle", {cx:bp[0], cy:bp[1], r:3 * k, fill:ink}, svg);
+  const bt = el("text", {x:bp[0] + 6 * k, y:bp[1] + 4 * k, "font-size":fs * .9, fill:ink2, stroke:surf, "stroke-width":3 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); bt.textContent = "Budapest";
+}
+
+let HUG = null, gasMapIdx = null;
+function flowMap(M){
+  const host = $("gz_flowMap");
+  if (!HUG){ host.innerHTML = ""; $("gz_mapSlider").parentElement.style.display = "none"; return; }
+  $("gz_mapSlider").parentElement.style.display = "";
+  const {days, pts, last, countries, net} = M, span = Math.min(last + 1, 730), base = last + 1 - span;
+  if (gasMapIdx == null || gasMapIdx > last || gasMapIdx < base) gasMapIdx = last;
+  const sl = $("gz_mapSlider"); sl.min = base; sl.max = last; sl.value = gasMapIdx;
+  sl.oninput = () => { gasMapIdx = +sl.value; flowMap(M); };
+  const i = gasMapIdx; $("gz_mapLabel").textContent = dayLabel(days[i]);
+  const rows = countries.filter(c => HUG.border[c]).map(c => {
+    const v = net[c][i], P = pts.filter(p => p.country === c);
+    const ent = P.filter(p => p.side === "entry").reduce((a, p) => a + (has(p.gwh[i]) ? p.gwh[i] : 0), 0), ext = P.filter(p => p.side === "exit").reduce((a, p) => a + (has(p.gwh[i]) ? p.gwh[i] : 0), 0);
+    const nm = NB[c] ? NB[c].n : c;
+    return {code:c, name:nm, net:has(v) ? v : null, sub:has(v) ? "be " + nf0.format(ent) + " · ki " + nf0.format(ext) : "",
+      tip:'<div class="t">' + esc(nm) + '</div>' + (has(v) ? row("var(--c1)", "Belép", nf0.format(ent) + " GWh/nap") + row("var(--c2)", "Kilép", nf0.format(ext) + " GWh/nap") + row("var(--ink2)", "Nettó", signed(v) + " GWh/nap") : "<div>Nincs adat</div>") + P.map(p => row(null, esc(p.label) + (p.side === "entry" ? " (be)" : " (ki)"), has(p.gwh[i]) ? nf0.format(p.gwh[i]) : "–")).join("")};
+  });
+  const tot = M.tot[i];
+  huFlowMap(host, HUG, rows, {unit:"GWh/nap", fmt:nf0, impVar:"--c1", expVar:"--c2", huVar:"--ink", aria:"Magyarország és szomszédai: földgázáramlás a határpontokon",
+    center:["Magyarország", has(tot) ? "nettó " + (tot >= 0 ? "import " : "export ") + nf0.format(Math.abs(tot)) + " GWh/nap" : ""]});
+  legend("gz_mapLegend", [{label:"Magyarországra érkező gáz (kék nyíl)", color:css("--c1")}, {label:"Magyarországról kilépő gáz (narancs nyíl)", color:css("--c2")}]);
+}
+async function loadHuGeo(){ try{ const r = await fetch("hu-geo.json", {cache:"no-cache"}); if (r.ok){ HUG = await r.json(); render(); } }catch(e){} }
+
 function flowSection(){
   const card = $("gz_cFlow"), M = flowModel();
   if (!M){ card.style.display = F ? "" : "none"; if (F) noData($("gz_flowChart"), "A határpontokra nincs közölt áramlási adat."); return; }
@@ -561,6 +654,7 @@ function flowSection(){
   const main = sorted[0];
   if (main){ const v = avgRange(net[main], last, 7); tiles += tile("Legnagyobb forrás (7 napos átlag)", (NB[main] ? NB[main].n : main), has(v) ? signed(v) + " GWh/nap" : ""); }
   $("gz_flowTiles").innerHTML = tiles;
+  flowMap(M);
   const e0 = last + 1 - gasBack, n = Math.min(gasN || 120, e0), off = e0 - n, dd = days.slice(off, off + n), narrow = $("gz_flowChart").clientWidth < 520;
   const ser = countries.map(c => ({label:(NB[c] ? NB[c].n : c), color:css(NB[c] ? NB[c].c : "--c8"), values:net[c].slice(off, off + n)}));
   legend("gz_flowLegend", ser.map(s => ({label:s.label, color:s.color})));
@@ -715,6 +809,7 @@ function proxySection(){
     A = G.agsi; F = G.flows; L = G.lng;
     if (A && !A.series[area]) area = Object.keys(A.series)[0];
     render();
+    loadHuGeo();
   }
   return {load, render, data: () => G};
 })();

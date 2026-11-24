@@ -151,7 +151,7 @@ def hourly_mean(s):
     return s.tz_convert("UTC").resample("h").mean()
 
 
-def collect(client, now=None, hours=48, budget_s=240, workers=8):
+def collect(client, now=None, hours=48, budget_s=240, workers=8, price_days=60):
     now = now or pd.Timestamp.now(tz="UTC")
     start = (now - pd.Timedelta(hours=hours)).floor("h")
     end = now.ceil("h") + pd.Timedelta(hours=1)
@@ -159,7 +159,7 @@ def collect(client, now=None, hours=48, budget_s=240, workers=8):
 
     # ---- kérések beadása (fontossági sorrendben), majd az eredmények összegyűjtése
     local_midnight = now.tz_convert("Europe/Budapest").normalize()
-    p_start = local_midnight - pd.Timedelta(days=max(1, -(-hours // 24)))      # az ársor a kért időablakig nyúlik vissza
+    p_start = local_midnight - pd.Timedelta(days=max(1, -(-hours // 24), price_days))      # az ársor legalább price_days napra nyúlik vissza (az árgrafikon hosszú ablakaihoz)
     p_end = local_midnight + pd.Timedelta(days=2)
     for code in NEIGHBOURS:
         for direction, a, b in (("import", code, HOME), ("export", HOME, code)):

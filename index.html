@@ -116,8 +116,9 @@ text{font-family:inherit}
 
   <section class="card" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), óránként">
     <h2>Merre folyik a villamos energia?</h2>
-    <p class="hint">A nyilak a legutóbbi olyan órára vonatkoznak, amelyre minden határ adata megvan. Kék nyíl: import Magyarországra, piros: export. A nyíl vastagsága és hossza a nettó teljesítménnyel arányos. Sematikus vázlat, nem pontos térkép.</p>
-    <div class="mapwrap" id="mapWrap" role="img" aria-label="Magyarország sematikus térképe a határkeresztező áramlások nyilaival"></div>
+    <p class="hint">A nyilak a legutóbbi olyan órára vonatkoznak, amelyre minden határ adata megvan. Kék nyíl: import Magyarországra, piros: export; a nyíl vastagsága a nettó teljesítménnyel arányos. A szomszéd színe a day-ahead ár különbsége a magyarhoz képest: kék, ha olcsóbb, piros, ha drágább (a villamos energia általában az olcsóbb zóna felől folyik). A nyilak a határátlépés irányát jelzik, nem az egyes távvezetékek nyomvonalát.</p>
+    <div class="mapwrap" id="mapWrap" role="img" aria-label="Magyarország és szomszédai a határkeresztező áramlások nyilaival"></div>
+    <div class="legend" id="mapLegend" style="margin-top:10px"></div>
   </section>
 
   <section class="card" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), óránként">
@@ -198,7 +199,8 @@ async function load(){
 
 // ---------- modell
 const WINS = [[24, "24 óra"], [48, "48 óra"], [72, "3 nap"], [168, "7 nap"]];
-let WIN = 48;
+const PWINS = [[24, "24 óra"], [48, "48 óra"], [72, "3 nap"], [168, "7 nap"], [720, "30 nap"], [1440, "60 nap"]];
+let WIN = 48, PWIN = 48;
 let ZOOM = null;            // az egérrel húzott nagyítás: [kezdet ms, vég ms), az időablakon belül
 function model(){
   const T = D.hourly_ts.map(s => new Date(s));
@@ -216,7 +218,8 @@ function model(){
   let pIdx = -1; pts.forEach((t,i) => { if (t <= NOW) pIdx = i; });
   const t0 = NOW.getTime() - WIN * 3600e3;
   let i0 = 0; while (i0 < n - 1 && T[i0].getTime() < t0) i0++;
-  let j0 = 0; while (j0 < pts.length - 1 && pts[j0].getTime() + step <= t0) j0++;
+  const tp0 = NOW.getTime() - PWIN * 3600e3;
+  let j0 = 0; while (j0 < pts.length - 1 && pts[j0].getTime() + step <= tp0) j0++;
   let i1 = n, j1 = pts.length;
   if (ZOOM){
     const [za, zb] = ZOOM;
@@ -236,11 +239,11 @@ function render(){
 function renderCharts(){ mapCard(); netChart(); priceChart(); }
 function winChips(){
   ["winNet", "winPrice"].forEach(id => {
-    const box = $(id); box.innerHTML = "";
-    WINS.forEach(([w, name]) => {
+    const box = $(id), isP = id === "winPrice"; box.innerHTML = "";
+    (isP ? PWINS : WINS).forEach(([w, name]) => {
       const b = document.createElement("button"); b.className = "chip"; b.type = "button";
-      b.setAttribute("aria-pressed", w === WIN && !ZOOM ? "true" : "false"); b.textContent = name;
-      b.onclick = () => { WIN = w; ZOOM = null; model(); winChips(); renderCharts(); };
+      b.setAttribute("aria-pressed", w === (isP ? PWIN : WIN) && !ZOOM ? "true" : "false"); b.textContent = name;
+      b.onclick = () => { if (isP) PWIN = w; else WIN = w; ZOOM = null; model(); winChips(); renderCharts(); };
       box.appendChild(b);
     });
     if (ZOOM){
@@ -253,7 +256,8 @@ function winChips(){
   });
   try{
     const hts = D.hourly_ts, have = hts.length > 1 ? Math.round((new Date(hts[hts.length - 1]) - new Date(hts[0])) / 3600e3) : 0;
-    ["winNet", "winPrice"].forEach(id => { if (have && have < Math.max(...WINS.map(w => w[0])) - 6){ const sp = document.createElement("span"); sp.style.cssText = "align-self:center;font-size:13px;color:var(--ink2)"; sp.textContent = "Az adat eddig csak kb. " + have + " órát fed le, ezért a hosszabb ablakok ugyanazt mutatják."; $(id).appendChild(sp); } });
+    const pts_ = D.prices && D.prices.ts ? D.prices.ts : [], haveP = pts_.length > 1 ? Math.round((new Date(pts_[pts_.length - 1]) - new Date(pts_[0])) / 3600e3) : 0;
+    [["winNet", have, Math.max(...WINS.map(w => w[0]))], ["winPrice", haveP, Math.max(...PWINS.map(w => w[0]))]].forEach(([id, hv, mx]) => { if (hv && hv < mx - 30){ const sp = document.createElement("span"); sp.style.cssText = "align-self:center;font-size:13px;color:var(--ink2)"; sp.textContent = "Az adat eddig csak kb. " + (hv >= 48 ? Math.round(hv / 24) + " napot" : hv + " órát") + " fed le, ezért a hosszabb ablakok ugyanazt mutatják."; $(id).appendChild(sp); } });
   }catch(e){}
   const nm = (WINS.find(x => x[0] === WIN) || [0, ""])[1];
   $("netTitle").textContent = "– " + nm;
@@ -341,7 +345,65 @@ function chips(){
 }
 
 
-// ---------- Magyarország sematikus vázlata nyilakkal
+// ---------- Magyarország és szomszédai: valódi határok, vékony nyilak, olvasható értékek (hu-geo.json)
+// rows: [{code, name, net (+ = Magyarország felé, − = kifelé, null = nincs adat), sub (második sor), tint (-1..1: a szomszéd színe), tip (html)}]
+// o: {unit, fmt, impVar, expVar, tintLo, tintHi, center:[cím, alcím], maxv}
+function huFlowMap(host, G, rows, o){
+  host.innerHTML = "";
+  const cw = host.clientWidth, W = Math.min(Math.max(cw, 600), 780), k = G.W / W, narrow = false, fs = 12 * k;
+  host.style.overflowX = cw < 600 ? "auto" : "visible";
+  const svg = el("svg", {viewBox:"0 0 " + G.W + " " + G.H, width:W, height:W * G.H / G.W, role:"img", "aria-label":o.aria || "Magyarország és szomszédai"}, host);
+  svg.style.maxWidth = "none"; svg.style.width = W + "px"; svg.style.height = (W * G.H / G.W) + "px"; svg.style.display = "block"; svg.style.margin = "0 auto"; svg.style.overflow = "hidden";
+  const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip); if (cw < 600) host.scrollLeft = (W - cw) / 2;
+  const ink = css("--ink"), ink2 = css("--ink2"), surf = css("--surface"), imp = css(o.impVar), exp = css(o.expVar);
+  const place = (ev, html) => { const r = svg.getBoundingClientRect(); tip.innerHTML = html; tip.style.display = "block"; const tw = tip.offsetWidth; let l = ev.clientX - r.left + 12; if (l + tw > host.clientWidth) l = Math.max(0, ev.clientX - r.left - tw - 12); tip.style.left = l + "px"; tip.style.top = Math.max(0, ev.clientY - r.top - 10) + "px"; };
+  el("path", {d:G.ctx, fill:css("--neutral"), stroke:surf, "stroke-width":.8 * k}, svg).setAttribute("opacity", ".7");
+  const byCode = {}; rows.forEach(r => byCode[r.code] = r);
+  Object.keys(G.zones).forEach(z => {
+    const r = byCode[z], p = el("path", {d:G.zones[z], stroke:z === "HU" ? ink : surf, "stroke-width":(z === "HU" ? 2 : 1) * k, "stroke-linejoin":"round"}, svg);
+    let fill = z === "HU" ? "color-mix(in srgb, " + css(o.huVar || "--neutral") + " 9%, " + surf + ")" : css("--neutral");
+    if (r && r.tint != null && z !== "HU"){ const t = Math.max(-1, Math.min(1, r.tint)), a = Math.round(Math.abs(t) * 70); fill = "color-mix(in srgb, " + css(t < 0 ? o.tintLo : o.tintHi) + " " + a + "%, " + css("--neutral") + ")"; }
+    p.style.fill = fill;
+    if (r && r.tip){ p.addEventListener("pointermove", ev => place(ev, r.tip)); p.addEventListener("pointerleave", () => { tip.style.display = "none"; }); }
+  });
+  const maxv = o.maxv || Math.max(1, ...rows.map(r => r.net == null ? 0 : Math.abs(r.net)));
+  rows.forEach(r => {
+    const g = G.border[r.code]; if (!g) return;
+    let ux = g.inn[0] - g.out[0], uy = g.inn[1] - g.out[1]; const ul = Math.hypot(ux, uy); ux /= ul; uy /= ul;      // a Magyarország felé mutató egységvektor
+    const L = (narrow ? 104 : 118) * 1, cx = g.b[0], cy = g.b[1];
+    const a = [cx - ux * L / 2, cy - uy * L / 2], z = [cx + ux * L / 2, cy + uy * L / 2];        // a = külső vég, z = belső vég
+    const grp = el("g", {}, svg);
+    if (r.net == null){
+      el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:ink2, "stroke-width":1.2 * k, "stroke-dasharray":(3 * k) + " " + (4 * k), opacity:.6}, grp);
+    } else {
+      const f = Math.min(1, Math.abs(r.net) / maxv), w = (1.1 + 2.6 * f) * k, col = r.net >= 0 ? imp : exp;
+      const from = r.net >= 0 ? a : z, to = r.net >= 0 ? z : a, dx = to[0] - from[0], dy = to[1] - from[1], dl = Math.hypot(dx, dy), vx = dx / dl, vy = dy / dl;
+      const hl = (7 + 2.5 * f) * k, hw = (3.2 + 1.6 * f) * k, ex = to[0] - vx * hl, ey = to[1] - vy * hl;
+      el("line", {x1:from[0], y1:from[1], x2:ex, y2:ey, stroke:col, "stroke-width":w, "stroke-linecap":"round"}, grp);
+      el("polygon", {points:[to[0], to[1], ex - vy * hw, ey + vx * hw, ex + vy * hw, ey - vx * hw].join(","), fill:col}, grp);
+    }
+    el("line", {x1:a[0], y1:a[1], x2:z[0], y2:z[1], stroke:"transparent", "stroke-width":16 * k}, grp);
+    if (r.tip){ grp.addEventListener("pointermove", ev => place(ev, r.tip)); grp.addEventListener("pointerleave", () => { tip.style.display = "none"; }); }
+    // felirat: a külső vég mögött, az irányhoz igazítva, háttér-körvonallal (nem folyik egybe a térképpel)
+    const lx = a[0] - ux * 9 * k, ly = a[1] - uy * 9 * k, anc = ux > .4 ? "end" : ux < -.4 ? "start" : "middle";
+    const yy = uy > .4 ? ly - fs * 1.9 : uy < -.4 ? ly + fs * 1.05 : ly - fs * .55;
+    const lines = [[r.name, 700, ink], [r.net == null ? "nincs adat" : signed(r.net, o.fmt) + " " + o.unit, 600, r.net == null ? ink2 : (r.net >= 0 ? imp : exp)]];
+    if (r.sub) lines.push([r.sub, 400, ink2]);
+    const ts = [];
+    lines.forEach(([txt, wt, c], j) => { const t = el("text", {x:lx, y:yy + j * fs * 1.2, "text-anchor":anc, "font-size":fs * (j === 2 ? .92 : 1), "font-weight":wt, fill:c, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "stroke-linejoin":"round", "pointer-events":"none"}, svg); t.textContent = txt; ts.push(t); });
+    // a felirat maradjon a rajzterületen belül
+    const bb = ts.map(t => t.getBBox()), x0 = Math.min(...bb.map(b => b.x)), x1 = Math.max(...bb.map(b => b.x + b.width)), pad = 6 * k;
+    const sh = x0 < pad ? pad - x0 : (x1 > G.W - pad ? (G.W - pad) - x1 : 0);
+    if (sh) ts.forEach(t => t.setAttribute("x", +t.getAttribute("x") + sh));
+  });
+  const hc = G.labels.HU;
+  if (o.center){ const t1 = el("text", {x:hc[0], y:hc[1], "text-anchor":"middle", "font-size":fs * 1.15, "font-weight":700, fill:ink, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t1.textContent = o.center[0];
+    const t2 = el("text", {x:hc[0], y:hc[1] + fs * 1.3, "text-anchor":"middle", "font-size":fs, fill:ink2, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t2.textContent = o.center[1]; }
+  const bp = G.cities.Budapest; el("circle", {cx:bp[0], cy:bp[1], r:3 * k, fill:ink}, svg);
+  const bt = el("text", {x:bp[0] + 6 * k, y:bp[1] + 4 * k, "font-size":fs * .9, fill:ink2, stroke:surf, "stroke-width":3 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); bt.textContent = "Budapest";
+}
+
+// ---------- Magyarország sematikus vázlata nyilakkal (tartalék, ha a hu-geo.json nem érhető el)
 const HU_POLY = [[16.11,46.87],[16.28,46.98],[16.42,47.15],[16.45,47.40],[16.52,47.55],[16.59,47.68],[16.85,47.70],[17.05,47.75],[17.10,47.87],[17.17,48.00],
   [17.45,47.88],[17.80,47.75],[18.12,47.76],[18.50,47.76],[18.75,47.80],[18.87,47.82],[18.95,47.95],[19.07,48.06],[19.35,48.08],[19.65,48.24],[19.90,48.16],[20.20,48.30],[20.45,48.45],[20.75,48.57],[21.10,48.52],[21.45,48.55],[21.72,48.35],
   [22.15,48.40],[22.35,48.32],[22.55,48.22],[22.75,48.10],[22.90,47.95],[22.70,47.85],[22.45,47.78],[22.35,47.55],[22.05,47.52],[21.95,47.25],[21.75,47.05],[21.55,46.75],[21.30,46.62],[21.12,46.30],[20.75,46.17],
@@ -352,7 +414,27 @@ const MAP_B = {
   AT:{p:[16.45,47.30], d:[-1,-0.15]}, SK:{p:[19.30,48.08], d:[0.1,-1]}, UA:{p:[22.55,48.22], d:[0.75,-0.65]},
   RO:{p:[21.95,47.30], d:[1,0.1]}, RS:{p:[19.75,46.15], d:[0.05,1]}, HR:{p:[17.45,45.97], d:[-0.25,1]}, SI:{p:[16.31,46.60], d:[-0.85,0.5]}
 };
+let HUG = null;
 function mapCard(){
+  if (!HUG){ mapCardOld(); return; }
+  const host = $("mapWrap"), i = M.lastIdx;
+  if (i < 0){ host.innerHTML = '<div class="err">Nincs elég áramlási adat a térképhez.</div>'; return; }
+  const hp = (D.prices.zones.HU || [])[M.pIdx];
+  const rows = D.borders.map(b => {
+    const imp = b.import_mw[i], exp = b.export_mw[i], has = imp != null || exp != null, net = has ? (imp || 0) - (exp || 0) : null;
+    const zp = D.prices.zones[b.code], price = (zp && M.pIdx >= 0) ? zp[M.pIdx] : null, spread = (price != null && hp != null) ? price - hp : null;
+    return {code:b.code, name:b.name, net, sub:price == null ? "" : nf1.format(price) + " €/MWh" + (spread == null ? "" : " (" + signed(spread, nf1) + ")"),
+      tint:spread == null ? null : spread / 60,
+      tip:'<div class="t">' + esc(b.name) + '</div>' + (has ? row("var(--imp)", "Import", nf0.format(imp || 0) + " MW") + row("var(--exp)", "Export", nf0.format(exp || 0) + " MW") + row("var(--ink2)", "Nettó", signed(net) + " MW") : "<div>Nincs adat</div>") +
+        (price == null ? "" : row("var(--muted)", "Day-ahead ár", nf1.format(price) + " €/MWh") + (spread == null ? "" : row("var(--muted)", "Különbség HU-hoz", signed(spread, nf1) + " €/MWh")))};
+  });
+  const net = D.net_import_mw[i];
+  huFlowMap(host, HUG, rows, {unit:"MW", fmt:nf0, impVar:"--imp", expVar:"--exp", tintLo:"--imp", tintHi:"--exp", huVar:"--ink", aria:"Magyarország és szomszédai: határkeresztező áramlás nyilakkal, zónák színe a day-ahead árkülönbség",
+    center:["Magyarország", "nettó " + (net >= 0 ? "import " : "export ") + nf0.format(Math.abs(net)) + " MW" + (hp == null ? "" : " · " + nf1.format(hp) + " €/MWh")]});
+  const lg = $("mapLegend"); if (lg) lg.innerHTML = '<span><svg width="120" height="12"><defs><linearGradient id="mlg"><stop offset="0" stop-color="' + css("--imp") + '"/><stop offset=".5" stop-color="' + css("--neutral") + '"/><stop offset="1" stop-color="' + css("--exp") + '"/></linearGradient></defs><rect width="120" height="12" rx="3" fill="url(#mlg)"/></svg>a szomszéd olcsóbb ← ár a magyarhoz képest → drágább (±60 €/MWh)</span><span><svg width="36" height="12"><line x1="2" y1="6" x2="28" y2="6" stroke="' + css("--imp") + '" stroke-width="2.5"/><polygon points="34,6 27,2 27,10" fill="' + css("--imp") + '"/></svg>import</span><span><svg width="36" height="12"><line x1="2" y1="6" x2="28" y2="6" stroke="' + css("--exp") + '" stroke-width="2.5"/><polygon points="34,6 27,2 27,10" fill="' + css("--exp") + '"/></svg>export</span>';
+}
+async function loadHuGeo(){ try{ const r = await fetch("hu-geo.json", {cache:"no-cache"}); if (r.ok){ HUG = await r.json(); if (M) mapCard(); } }catch(e){} }
+function mapCardOld(){
   const host = $("mapWrap"); host.innerHTML = "";
   const i = M.lastIdx;
   if (i < 0){ host.innerHTML = '<div class="err">Nincs elég áramlási adat a vázlathoz.</div>'; return; }
@@ -591,6 +673,7 @@ function foot(){
 }
 
 load();
+loadHuGeo();
 </script>
 </body>
 </html>

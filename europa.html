@@ -628,29 +628,45 @@ function fmapSection(){
     el("path", at, g);
     g.addEventListener("pointermove", ev => place(ev, zinfo(z))); g.addEventListener("pointerleave", () => { tip.style.display = "none"; });
   });
-  // nyilak: a két zóna címkepontja között, a vastagság arányos az áramlással
+  // nyilak: vékony vonal a két zóna címkepontja között, az érték olvasható címkében (egymást nem takaró elhelyezéssel)
   const drawn = [];
   FL.forEach(f => {
     const v = f.mw[fmIdx], A = GEO.labels[f.a], B = GEO.labels[f.b]; if (!has(v) || !A || !B) return;
     drawn.push({f, v});
   });
+  const boxes = [], ink = css("--ink"), surf = css("--surface"), fsz = (narrow ? 11 : 10.5) * k;
+  const hit = (x, y, w, h) => boxes.some(b => x < b[0] + b[2] && x + w > b[0] && y < b[1] + b[3] && y + h > b[1]);
+  const lbls = [];
   drawn.sort((x, y) => Math.abs(x.v) - Math.abs(y.v)).forEach(({f, v}) => {
     const A = GEO.labels[f.a], B = GEO.labels[f.b], from = v >= 0 ? A : B, to = v >= 0 ? B : A, a = Math.abs(v);
     if (a < 20) return;
-    const w = (1.2 + Math.min(a, 4000) / 4000 * 7.5) * k, dx = to[0] - from[0], dy = to[1] - from[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
-    const mx_ = (from[0] + to[0]) / 2, my_ = (from[1] + to[1]) / 2, ah = (5 + w * 1.4);
+    const w = (0.7 + Math.min(a, 4000) / 4000 * 2.2) * k, dx = to[0] - from[0], dy = to[1] - from[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
     const g = el("g", {}, svg); g.style.cursor = "pointer";
-    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:css("--ink"), "stroke-width":w, opacity:.55, "stroke-linecap":"round"}, g);
-    el("polygon", {points:[[mx_ + ux * ah, my_ + uy * ah], [mx_ - ux * ah * .4 - uy * ah * .8, my_ - uy * ah * .4 + ux * ah * .8], [mx_ - ux * ah * .4 + uy * ah * .8, my_ - uy * ah * .4 - ux * ah * .8]].map(p => p.join(",")).join(" "), fill:css("--ink"), opacity:.85}, g);
-    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:"transparent", "stroke-width":Math.max(w, 14 * k)}, g);
+    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:ink, "stroke-width":w, opacity:.5, "stroke-linecap":"round"}, g);
+    const ah = 5.5 * k, tx = from[0] + dx * .84, ty = from[1] + dy * .84;     // nyílhegy a cél előtt, hogy a csomópontoknál ne torlódjon
+    el("polygon", {points:[[tx + ux * ah, ty + uy * ah], [tx - uy * ah * .6, ty + ux * ah * .6], [tx + uy * ah * .6, ty - ux * ah * .6]].map(p => p.join(",")).join(" "), fill:ink, opacity:.8}, g);
+    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:"transparent", "stroke-width":Math.max(w, 12 * k)}, g);
     g.addEventListener("pointermove", ev => place(ev, '<div class="t">' + esc(nm(f.a)) + (v >= 0 ? " → " : " ← ") + esc(nm(f.b)) + '</div>' + row(null, "Fizikai nettó áramlás", nf0.format(a) + " MW")));
     g.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+    lbls.push({from, to, a, ux, uy, L});
+  });
+  // értékcímkék: a legnagyobb áramlás kap elsőbbséget, ütközésnél a vonal mentén odébb kerül, ha sehol nem fér el, elmarad
+  lbls.sort((x, y) => y.a - x.a).forEach(l => {
+    const txt = nf0.format(l.a), tw = txt.length * fsz * .62 + 6 * k, th = fsz * 1.25;
+    for (const t of [.46, .36, .56, .28, .64, .2, .72]){
+      const x = l.from[0] + (l.to[0] - l.from[0]) * t, y = l.from[1] + (l.to[1] - l.from[1]) * t;
+      if (hit(x - tw / 2, y - th / 2, tw, th)) continue;
+      boxes.push([x - tw / 2, y - th / 2, tw, th]);
+      const rr = el("rect", {x:x - tw / 2, y:y - th / 2, width:tw, height:th, rx:th / 2, fill:surf, opacity:.88, "pointer-events":"none"}, svg);
+      const tt = el("text", {x, y:y + fsz * .36, "text-anchor":"middle", "font-size":fsz, "font-weight":650, fill:ink, "pointer-events":"none"}, svg); tt.textContent = txt;
+      break;
+    }
   });
   // értékek a zónákon (nettó pozíció), csak ahol nem zsúfolt
   Object.keys(net).forEach(z => { const L = GEO.labels[z]; if (!L || narrow) return; const c = col(z), tc = c ? textOn(c) : css("--ink2");
     const tx = el("text", {x:L[0], y:L[1] - 6 * k, "text-anchor":"middle", "font-size":9 * k, "font-weight":700, fill:tc, "pointer-events":"none"}, svg); tx.textContent = (TILECODE[z] || z); });
   $("fmLegend").innerHTML = '<span><svg width="150" height="12"><defs><linearGradient id="fmg"><stop offset="0" stop-color="' + rgbStr(exp) + '"/><stop offset=".5" stop-color="' + rgbStr(neutral) + '"/><stop offset="1" stop-color="' + rgbStr(imp) + '"/></linearGradient></defs><rect width="150" height="12" rx="3" fill="url(#fmg)"/></svg>nettó export ← 0 → nettó import (±' + nf0.format(mx) + ' MW)</span>' +
-    '<span><svg width="30" height="12"><line x1="2" y1="6" x2="28" y2="6" stroke="' + css("--ink") + '" stroke-width="5" opacity=".55" stroke-linecap="round"/></svg>áramlás iránya és nagysága</span>';
+    '<span><svg width="30" height="12"><line x1="2" y1="6" x2="28" y2="6" stroke="' + css("--ink") + '" stroke-width="2" opacity=".6" stroke-linecap="round"/></svg>áramlás iránya (a szám: MW)</span>';
   const top = drawn.slice().sort((x, y) => Math.abs(y.v) - Math.abs(x.v)).slice(0, 5).map(({f, v}) => esc(nm(v >= 0 ? f.a : f.b)) + " → " + esc(nm(v >= 0 ? f.b : f.a)) + ": " + nf0.format(Math.abs(v)) + " MW").join("; ");
   $("fmNote").textContent = "Legnagyobb áramlások ebben az órában: " + (top || "–") + ". A fizikai áramlás nem azonos a kereskedelmi menetrenddel (hurokáramlások miatt eltérhet). A zónák nettó pozíciója csak a térképen szereplő határokat tartalmazza (pl. az Egyesült Királyság, Skandinávia, Ukrajna és a mediterrán kábelek nélkül). A nyilak a zónák középpontjai között egyenes vonalak, nem a vezetékek tényleges nyomvonalai.";
 }

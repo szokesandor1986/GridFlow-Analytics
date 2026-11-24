@@ -115,3 +115,14 @@ A `freq.py` az Energy-Charts API (Fraunhofer ISE) `/v2/frequency` végpontját h
 - **Kulcs:** GitHub → Settings → Secrets and variables → Actions → New repository secret, név: `HUPX_KEY`. Kulcs nélkül vagy hiba esetén a lépés kimarad, a kártya nem jelenik meg, a közzététel megtörténik.
 - A HUPX feltételei szerint a HUPX-adat továbbhasznosítása szerződéshez kötött lehet; ezt a kulcshoz tartozó feltételek alapján ellenőrizd.
 - Az Áttekintés és a Mérnöki nézet óránkénti idősáv-választója mellett figyelmeztetés jelenik meg, ha az éles adat rövidebb a választott ablaknál (ilyenkor a hosszabb ablakok ugyanazt mutatják).
+
+## JAO (6. kör, felderítő lépés)
+
+A `jao.py` az első futáskor egy órányi `finalComputation`, `netPos` és `maxExchanges` mintát kér le (kulcs nélkül), és a mezőneveket a workflow logjába ("JAO …: mezők = …") és a `jao_probe.json`-ba írja. A kiesés/terhelés (CNEC) fület ebből építjük a valódi szerkezetre.
+
+## Térképek (7. kör)
+
+- `hu-geo.json` (Natural Earth, a Magyarország körüli kivágás) adja a magyar térképet: Áttekintés (villamos energia: nyilak a határokon, a szomszéd színe a day-ahead árkülönbség) és Földgáz (határpontok, nap csúszkával).
+- Az európai áramlási térképen vékony vonalak és ütközésmentes MW-értékek vannak.
+- Az Áttekintés árgrafikonjának külön időablaka van (24 órától 60 napig); a gyűjtő az ársort 60 napra tölti le (`price_days`).
+- Mobilon a magyar térkép oldalra görgethető, hogy a feliratok olvashatók maradjanak.
