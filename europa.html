@@ -104,11 +104,19 @@ text{font-family:inherit}
   <section class="card" id="cEu" data-src="ENTSO-E Transparency Platform – day-ahead árak (12.1.D)"></section>
   <section class="card" id="cMap" data-src="ENTSO-E Transparency Platform – day-ahead árak (12.1.D), termelés típusonként (16.1.B&C), fizikai áramlás (12.1.G); CO₂-intenzitás és részarányok: saját számítás" style="display:none">
     <h2>Térkép: az európai zónák egy pillantásra</h2>
-    <p class="hint">Egy négyzet egy ajánlati zóna; az elhelyezés közelítőleg földrajzi (négyzetrácsos térkép). Válassz mutatót. Egérrel vagy érintéssel az adott zóna összes elérhető értéke látszik.</p>
+    <p class="hint">Egy színes terület egy ajánlati zóna (Észak-Olaszország az ország északi része, közelítő határral). Válassz mutatót. Egérrel vagy érintéssel az adott zóna összes elérhető értéke látszik.</p>
     <div class="chips" id="mapChips" role="group" aria-label="Térkép mutatója"></div>
     <div class="chart" id="mapChart"></div>
     <div class="legend" id="mapLegend" style="margin-top:10px"></div>
     <p class="note" id="mapNote"></p>
+  </section>
+  <section class="card" id="cFmap" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), zónapáronként; a zóna nettó pozíciója a térképen szereplő határok összege, saját számítás" style="display:none">
+    <h2>Európai áramlási térkép</h2>
+    <p class="hint">A nyilak a szomszédos zónák közti fizikai áramlás irányát és nagyságát mutatják (a nyíl vastagsága arányos a MW-tal). A zónák színe a nettó pozíció a térképen szereplő határokon: narancs a nettó importőr, kék a nettó exportőr. A csúszkával az elmúlt 48 óra bármely órája megnézhető.</p>
+    <div class="chips" style="align-items:center"><label for="fmSlider" style="font-size:13.5px;color:var(--ink2)">Óra:</label><input type="range" id="fmSlider" min="0" max="47" step="1" style="flex:1;min-width:160px;max-width:420px"><b id="fmLabel" class="num" style="font-size:13.5px"></b></div>
+    <div class="chart" id="fmChart"></div>
+    <div class="legend" id="fmLegend" style="margin-top:10px"></div>
+    <p class="note" id="fmNote"></p>
   </section>
   <section class="card" id="cKey" data-src="ENTSO-E Transparency Platform – havi összesítés (history.json), saját számítás"></section>
   <section class="card" id="cWin"></section>
@@ -416,7 +424,7 @@ function dragZoom(host, svg, W, Ht, x0, x1, y0, y1, n, off){
 const TILEPOS = {NL:[1,0], DE_LU:[2,0], PL:[3,0], FR:[0,1], BE:[1,1], CZ:[3,1], SK:[4,1], ES:[0,2], CH:[1,2], IT_NORD:[2,2], AT:[3,2], HU:[4,2], RO:[5,2],
   SI:[3,3], HR:[4,3], RS:[5,3], GR:[4,4], BG:[5,4]};
 const TILECODE = {DE_LU:"DE", IT_NORD:"IT-N"};
-let MAPX = null, mapMetric = "price", mapPin = null;
+let GEO = null, MAPX = null, mapMetric = "price", mapPin = null;
 const _cv = document.createElement("canvas").getContext("2d");
 function rgbOf(c){ _cv.fillStyle = "#000"; _cv.fillStyle = c; const v = _cv.fillStyle; if (v[0] === "#") return [1, 3, 5].map(i => parseInt(v.slice(i, i + 2), 16)); return (v.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map(Number); }
 const mixRgb = (a, b, t) => a.map((x, i) => Math.round(x + (b[i] - x) * t));
@@ -512,17 +520,51 @@ function mapSection(){
 
   // rajz
   const host = $("mapChart"); host.innerHTML = "";
-  const W = Math.min(Math.max(300, host.clientWidth), 660), cols = 6, rows = 5, ts = Math.floor(W / cols), H_ = ts * rows, narrow = ts < 70;
-  const svg = el("svg", {viewBox:"0 0 " + (ts * cols) + " " + H_, width:ts * cols, height:H_, role:"img", "aria-label":"Négyzetrácsos európai zónatérkép: " + cur.n}, host);
-  svg.style.maxWidth = "100%"; svg.style.margin = "0 auto";
-  const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
-  const zonesAll = Object.keys(TILEPOS).filter(z => (H && (H.zones || []).includes(z)) || (EU && EU.zones && EU.names && EU.names[z]) || M.zones.has(z));
+  const names2 = names;
   const info = (z) => {
     let h = '<div class="t">' + esc(nm(z)) + '</div>';
     MAP_METRICS.forEach(m => { const v = M.v[m.k] && M.v[m.k][z]; if (!has(v)) return; h += row(m.k === mapMetric ? css("--ink2") : null, esc(m.n), m.f(v) + " " + m.u); });
     const at = M.at && M.at[mapMetric + "|" + z]; if (at) h += '<div class="sub">' + (mapMetric === "price" || mapMetric === "diff" ? "" : "adat: ") + fDate.format(at) + ", " + fTime.format(at) + '</div>';
     return h;
   };
+  if (GEO){
+    const Wd = Math.min(Math.max(300, host.clientWidth), 760), k = GEO.W / Wd, narrow = Wd < 520;
+    const svg = el("svg", {viewBox:"0 0 " + GEO.W + " " + GEO.H, width:Wd, height:Wd * GEO.H / GEO.W, role:"img", "aria-label":"Európai zónatérkép: " + cur.n}, host);
+    svg.style.maxWidth = "100%"; svg.style.margin = "0 auto"; svg.style.display = "block"; svg.style.overflow = "hidden";
+    const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
+    el("path", {d:GEO.ctx, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);
+    const cid = el("clipPath", {id:"itN"}, el("defs", {}, svg)); el("rect", {x:0, y:0, width:GEO.W, height:GEO.itCut}, cid);
+    const show = (z, ev) => { const r = svg.getBoundingClientRect(); tip.innerHTML = info(z); tip.style.display = "block"; const tw = tip.offsetWidth; let l = ev.clientX - r.left + 12; if (l + tw > host.clientWidth) l = Math.max(0, ev.clientX - r.left - tw - 12); tip.style.left = l + "px"; tip.style.top = Math.max(0, ev.clientY - r.top - 10) + "px"; };
+    const zl = Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]);
+    zl.forEach(z => {
+      const v = vals[z], d = z === "IT_NORD" ? GEO.zones.IT : GEO.zones[z];
+      let fill = "none", tc = css("--ink2"), c = null;
+      if (has(v)){ c = color(v); fill = rgbStr(c); tc = textOn(c); }
+      const g = el("g", {tabindex:0, role:"img", "aria-label":nm(z) + ": " + (has(v) ? cur.f(v) + " " + cur.u : "nincs adat")}, svg); g.style.cursor = "pointer"; g.style.outline = "none";
+      const attrs = {d, fill:has(v) ? fill : css("--surface"), stroke:z === mapPin ? css("--ink") : (z === "HU" ? css("--ink") : css("--surface")), "stroke-width":(z === mapPin || z === "HU" ? 2 : .9) * k, "stroke-linejoin":"round"};
+      if (z === "IT_NORD") attrs["clip-path"] = "url(#itN)";
+      if (!has(v)) { attrs["fill-opacity"] = .6; }
+      el("path", attrs, g);
+      if (z === "IT_NORD") el("path", {d, fill:"none", stroke:css("--surface"), "stroke-width":.9 * k, "clip-path":"url(#itN)"}, g);
+      const L = GEO.labels[z]; if (L){
+        const small = ["SI","HR","SK","CH","BE","NL","HU","AT","CZ"].includes(z), fs = (narrow ? (small ? 7.5 : 9) : (small ? 9.5 : 11.5)) * k;
+        const t1 = el("text", {x:L[0], y:L[1] - (narrow ? 0 : fs * .15), "text-anchor":"middle", "font-size":fs, "font-weight":700, fill:tc, "pointer-events":"none"}, g); t1.textContent = has(v) ? cur.f(v) : "–";
+        if (!narrow){ const t2 = el("text", {x:L[0], y:L[1] + fs * 1.05, "text-anchor":"middle", "font-size":fs * .78, "font-weight":600, fill:tc, opacity:.85, "pointer-events":"none"}, g); t2.textContent = TILECODE[z] || z; }
+      }
+      const mv = (ev) => show(z, ev);
+      g.addEventListener("pointermove", mv); g.addEventListener("pointerenter", mv);
+      g.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+      g.addEventListener("click", (ev) => { mapPin = mapPin === z ? null : z; mapSection(); });
+      g.addEventListener("focus", () => { const r = g.getBoundingClientRect(), h = host.getBoundingClientRect(); show(z, {clientX:r.left + r.width / 2, clientY:r.top + r.height / 2}); }); g.addEventListener("blur", () => { tip.style.display = "none"; });
+    });
+    if (narrow) { /* a kódok a koppintásra megjelenő súgóban vannak */ }
+  } else {
+
+  const W = Math.min(Math.max(300, host.clientWidth), 660), cols = 6, rows = 5, ts = Math.floor(W / cols), H_ = ts * rows, narrow = ts < 70;
+  const svg = el("svg", {viewBox:"0 0 " + (ts * cols) + " " + H_, width:ts * cols, height:H_, role:"img", "aria-label":"Négyzetrácsos európai zónatérkép: " + cur.n}, host);
+  svg.style.maxWidth = "100%"; svg.style.margin = "0 auto";
+  const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
+  const zonesAll = Object.keys(TILEPOS).filter(z => (H && (H.zones || []).includes(z)) || (EU && EU.zones && EU.names && EU.names[z]) || M.zones.has(z));
   const showTip = (z, tx, ty) => { tip.innerHTML = info(z); tip.style.display = "block"; const r = svg.getBoundingClientRect(), s = r.width / (ts * cols), tw = tip.offsetWidth; let l = tx * s + 10; if (l + tw > host.clientWidth) l = Math.max(0, tx * s - tw - 10); tip.style.left = l + "px"; tip.style.top = Math.max(0, ty * s - 8) + "px"; };
   zonesAll.forEach(z => {
     const [cx, cy] = TILEPOS[z], x = cx * ts + 2, y = cy * ts + 2, w = ts - 4, v = vals[z], code = TILECODE[z] || z;
@@ -538,7 +580,8 @@ function mapSection(){
     g.addEventListener("click", () => { mapPin = mapPin === z ? null : z; mapSection(); });
     g.addEventListener("focus", () => showTip(z, cx * ts + ts, cy * ts)); g.addEventListener("blur", () => { tip.style.display = "none"; });
   });
-  if (mapPin && TILEPOS[mapPin]) showTip(mapPin, TILEPOS[mapPin][0] * ts + ts, TILEPOS[mapPin][1] * ts);
+  }
+
   const at = (M.at && Object.keys(M.at).filter(k => k.startsWith(mapMetric + "|")).map(k => M.at[k])[0]);
   $("mapNote").textContent = cur.d + (mapMetric === "avg12" || mapMetric === "neg12" ? " (" + (M.span || "") + ")" : "") + (at ? " Adat: " + fDate.format(at) + ", " + fTime.format(at) + "." : "") +
     " A zónák időbeli adata eltérhet, mert a közlők késve töltik fel; az utolsó órák később módosulhatnak. A kiemelt keret a magyar zóna; a nem szereplő zónák (pl. Skandinávia, Brit-szigetek) ebben a kiadásban nincsenek a gyűjtésben.";
@@ -546,8 +589,70 @@ function mapSection(){
 async function loadMapExtra(){
   const demo = new URLSearchParams(location.search).get("demo");
   const g = (f) => getJson((demo ? "demo-" : "") + f).catch(() => null);
-  const [c, e, d] = await Promise.all([g("countries.json"), g("engineer.json"), g("data.json")]);
+  const [c, e, d, geo] = await Promise.all([g("countries.json"), g("engineer.json"), g("data.json"), getJson("europe-geo.json").catch(() => null)]);
+  if (geo){ GEO = geo; mapSection(); fmapSection(); }
   if (c || e){ MAPX = {c, e, d}; mapSection(); }
+}
+
+
+// ---------------------------------------------------------------- európai áramlási térkép
+let fmIdx = null;
+function fmapSection(){
+  const card = $("cFmap");
+  if (!EU || !EU.flows || !EU.flows.length || !GEO){ card.style.display = "none"; return; }
+  card.style.display = "";
+  const ts = EU.flow_ts.map(t => new Date(t)), n = ts.length, FL = EU.flows, names = EU.names || {}, nm = (z) => names[z] || z;
+  const cnt = (i) => FL.filter(f => has(f.mw[i])).length, best = Math.max(0, ...ts.map((_, i) => cnt(i)));
+  if (fmIdx == null || fmIdx >= n){ fmIdx = -1; for (let i = 0; i < n; i++) if (ts[i] <= NOW && cnt(i) >= best * .7) fmIdx = i; if (fmIdx < 0) fmIdx = n - 1; }
+  const sl = $("fmSlider"); sl.max = n - 1; sl.value = fmIdx;
+  sl.oninput = () => { fmIdx = +sl.value; fmapSection(); };
+  const t = ts[fmIdx]; $("fmLabel").textContent = fDate.format(t) + " " + fTime.format(t) + "–" + fTime.format(new Date(t.getTime() + 3600e3));
+  const net = {}; FL.forEach(f => { const v = f.mw[fmIdx]; if (!has(v)) return; net[f.a] = (net[f.a] || 0) + v; net[f.b] = (net[f.b] || 0) - v; });   // + = nettó export
+  const arr = Object.values(net).map(Math.abs).sort((a, b) => a - b), mx = Math.max(500, arr[Math.floor(arr.length * .9)] || 500);
+  const neutral = rgbOf(css("--neutral")), imp = rgbOf(css("--c2")), exp = rgbOf(css("--c1"));
+  const host = $("fmChart"); host.innerHTML = "";
+  const Wd = Math.min(Math.max(300, host.clientWidth), 760), k = GEO.W / Wd, narrow = Wd < 520;
+  const svg = el("svg", {viewBox:"0 0 " + GEO.W + " " + GEO.H, width:Wd, height:Wd * GEO.H / GEO.W, role:"img", "aria-label":"Európai áramlási térkép"}, host);
+  svg.style.maxWidth = "100%"; svg.style.margin = "0 auto"; svg.style.display = "block"; svg.style.overflow = "hidden";
+  const tip = document.createElement("div"); tip.className = "tip"; host.style.position = "relative"; host.appendChild(tip);
+  el("path", {d:GEO.ctx, fill:css("--neutral"), stroke:css("--surface"), "stroke-width":.8 * k}, svg);
+  const cid = el("clipPath", {id:"itN2"}, el("defs", {}, svg)); el("rect", {x:0, y:0, width:GEO.W, height:GEO.itCut}, cid);
+  const col = (z) => { const v = net[z]; if (!has(v)) return null; return v > 0 ? mixRgb(neutral, exp, Math.min(1, v / mx)) : mixRgb(neutral, imp, Math.min(1, -v / mx)); };
+  const zinfo = (z) => '<div class="t">' + esc(nm(z)) + '</div>' + (has(net[z]) ? row(null, net[z] > 0 ? "Nettó export" : "Nettó import", nf0.format(Math.abs(net[z])) + " MW") : "<div>Nincs adat</div>") +
+    FL.filter(f => (f.a === z || f.b === z) && has(f.mw[fmIdx])).map(f => { const o = f.a === z ? f.b : f.a, v = f.a === z ? f.mw[fmIdx] : -f.mw[fmIdx]; return row(null, (v >= 0 ? "→ " : "← ") + esc(nm(o)), nf0.format(Math.abs(v)) + " MW"); }).join("");
+  const place = (ev, html) => { const r = svg.getBoundingClientRect(); tip.innerHTML = html; tip.style.display = "block"; const tw = tip.offsetWidth; let l = ev.clientX - r.left + 12; if (l + tw > host.clientWidth) l = Math.max(0, ev.clientX - r.left - tw - 12); tip.style.left = l + "px"; tip.style.top = Math.max(0, ev.clientY - r.top - 10) + "px"; };
+  Object.keys(GEO.zones).filter(z => z !== "IT").concat(["IT_NORD"]).forEach(z => {
+    const c = col(z), g = el("g", {}, svg); g.style.cursor = "default";
+    const at = {d:z === "IT_NORD" ? GEO.zones.IT : GEO.zones[z], fill:c ? rgbStr(c) : css("--surface"), "fill-opacity":1, stroke:z === "HU" ? css("--ink") : css("--surface"), "stroke-width":(z === "HU" ? 2 : .9) * k, "stroke-linejoin":"round"};
+    if (z === "IT_NORD") at["clip-path"] = "url(#itN2)";
+    el("path", at, g);
+    g.addEventListener("pointermove", ev => place(ev, zinfo(z))); g.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+  });
+  // nyilak: a két zóna címkepontja között, a vastagság arányos az áramlással
+  const drawn = [];
+  FL.forEach(f => {
+    const v = f.mw[fmIdx], A = GEO.labels[f.a], B = GEO.labels[f.b]; if (!has(v) || !A || !B) return;
+    drawn.push({f, v});
+  });
+  drawn.sort((x, y) => Math.abs(x.v) - Math.abs(y.v)).forEach(({f, v}) => {
+    const A = GEO.labels[f.a], B = GEO.labels[f.b], from = v >= 0 ? A : B, to = v >= 0 ? B : A, a = Math.abs(v);
+    if (a < 20) return;
+    const w = (1.2 + Math.min(a, 4000) / 4000 * 7.5) * k, dx = to[0] - from[0], dy = to[1] - from[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+    const mx_ = (from[0] + to[0]) / 2, my_ = (from[1] + to[1]) / 2, ah = (5 + w * 1.4);
+    const g = el("g", {}, svg); g.style.cursor = "pointer";
+    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:css("--ink"), "stroke-width":w, opacity:.55, "stroke-linecap":"round"}, g);
+    el("polygon", {points:[[mx_ + ux * ah, my_ + uy * ah], [mx_ - ux * ah * .4 - uy * ah * .8, my_ - uy * ah * .4 + ux * ah * .8], [mx_ - ux * ah * .4 + uy * ah * .8, my_ - uy * ah * .4 - ux * ah * .8]].map(p => p.join(",")).join(" "), fill:css("--ink"), opacity:.85}, g);
+    el("line", {x1:from[0], y1:from[1], x2:to[0], y2:to[1], stroke:"transparent", "stroke-width":Math.max(w, 14 * k)}, g);
+    g.addEventListener("pointermove", ev => place(ev, '<div class="t">' + esc(nm(f.a)) + (v >= 0 ? " → " : " ← ") + esc(nm(f.b)) + '</div>' + row(null, "Fizikai nettó áramlás", nf0.format(a) + " MW")));
+    g.addEventListener("pointerleave", () => { tip.style.display = "none"; });
+  });
+  // értékek a zónákon (nettó pozíció), csak ahol nem zsúfolt
+  Object.keys(net).forEach(z => { const L = GEO.labels[z]; if (!L || narrow) return; const c = col(z), tc = c ? textOn(c) : css("--ink2");
+    const tx = el("text", {x:L[0], y:L[1] - 6 * k, "text-anchor":"middle", "font-size":9 * k, "font-weight":700, fill:tc, "pointer-events":"none"}, svg); tx.textContent = (TILECODE[z] || z); });
+  $("fmLegend").innerHTML = '<span><svg width="150" height="12"><defs><linearGradient id="fmg"><stop offset="0" stop-color="' + rgbStr(exp) + '"/><stop offset=".5" stop-color="' + rgbStr(neutral) + '"/><stop offset="1" stop-color="' + rgbStr(imp) + '"/></linearGradient></defs><rect width="150" height="12" rx="3" fill="url(#fmg)"/></svg>nettó export ← 0 → nettó import (±' + nf0.format(mx) + ' MW)</span>' +
+    '<span><svg width="30" height="12"><line x1="2" y1="6" x2="28" y2="6" stroke="' + css("--ink") + '" stroke-width="5" opacity=".55" stroke-linecap="round"/></svg>áramlás iránya és nagysága</span>';
+  const top = drawn.slice().sort((x, y) => Math.abs(y.v) - Math.abs(x.v)).slice(0, 5).map(({f, v}) => esc(nm(v >= 0 ? f.a : f.b)) + " → " + esc(nm(v >= 0 ? f.b : f.a)) + ": " + nf0.format(Math.abs(v)) + " MW").join("; ");
+  $("fmNote").textContent = "Legnagyobb áramlások ebben az órában: " + (top || "–") + ". A fizikai áramlás nem azonos a kereskedelmi menetrenddel (hurokáramlások miatt eltérhet). A zónák nettó pozíciója csak a térképen szereplő határokat tartalmazza (pl. az Egyesült Királyság, Skandinávia, Ukrajna és a mediterrán kábelek nélkül). A nyilak a zónák középpontjai között egyenes vonalak, nem a vezetékek tényleges nyomvonalai.";
 }
 
 // ---------------------------------------------------------------- renderelés
@@ -570,7 +675,7 @@ function winSection(){
     const w = b - a, st = Math.max(1, Math.round(w / 2)) * +btn.dataset.s; let na = a + st; na = Math.max(0, Math.min(R.n - w, na)); setView(na, na + w >= R.n ? null : na + w); }));
 }
 function renderCharts(){
-  euSection(); mapSection(); keySection();
+  euSection(); mapSection(); fmapSection(); keySection();
   if (!H){ ["cMix","cSolar","cZone","cDuck","cLoad","cImp","cYear"].forEach(id => { const s = $(id); s.style.display = ""; s.querySelectorAll(".chart,.chips,.legend").forEach(x => x.innerHTML = ""); }); noHist(); return; }
   mixSection(); solarSection(); zoneSection(); duckSection(); loadSection(); impSection(); yearSection();
 }

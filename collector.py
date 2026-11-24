@@ -26,6 +26,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 
 HOME = "HU"
@@ -700,6 +701,17 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
     }
 
 
+# Szomszédos zónapárok az európai áramlási térképhez (a nettó áramlás a -> b irányban pozitív).
+EUROPE_PAIRS = [
+    ("HU", "AT"), ("HU", "SK"), ("HU", "RO"), ("HU", "HR"), ("HU", "SI"), ("HU", "RS"),
+    ("AT", "DE_LU"), ("AT", "CZ"), ("AT", "SI"), ("AT", "CH"), ("AT", "IT_NORD"),
+    ("SK", "CZ"), ("SK", "PL"), ("RO", "BG"), ("RO", "RS"), ("HR", "SI"), ("HR", "RS"), ("SI", "IT_NORD"),
+    ("RS", "BG"), ("BG", "GR"), ("CZ", "DE_LU"), ("CZ", "PL"), ("DE_LU", "PL"), ("DE_LU", "FR"),
+    ("DE_LU", "NL"), ("DE_LU", "BE"), ("DE_LU", "CH"), ("FR", "BE"), ("FR", "CH"), ("FR", "ES"),
+    ("FR", "IT_NORD"), ("CH", "IT_NORD"), ("NL", "BE"),
+]
+
+
 def collect_europe(client, now=None, budget_s=120, workers=8):
     """Az európai zónák day-ahead ára az utolsó napokra (europe.json). Hibája nem érinti a többi fájlt."""
     now = now or pd.Timestamp.now(tz="UTC")
@@ -708,14 +720,30 @@ def collect_europe(client, now=None, budget_s=120, workers=8):
     B = Batch(budget_s, workers=workers)
     for z in EUROPE_ZONES:
         B.add(f"ár {z}", lambda z=z: client.query_day_ahead_prices(z, start=p_start, end=p_end))
+    f_start, f_end = now.floor("h") - pd.Timedelta(hours=47), now.floor("h") + pd.Timedelta(hours=1)
+    for a, b in EUROPE_PAIRS:        # fizikai áramlás mindkét irányban; a nettó a két irány különbsége
+        B.add(f"áramlás {a}->{b}", lambda a=a, b=b: client.query_crossborder_flows(a, b, start=f_start, end=f_end))
+        B.add(f"áramlás {b}->{a}", lambda a=a, b=b: client.query_crossborder_flows(b, a, start=f_start, end=f_end))
     series = {}
     for z in EUROPE_ZONES:
         s = B.get(f"ár {z}")
         if s is not None:
             series[z] = hourly_mean(s.tz_convert("UTC"))
+    f_idx = pd.date_range(f_start, f_end, freq="h", tz="UTC", inclusive="left")
+    pairs = []
+    for a, b in EUROPE_PAIRS:
+        ab, ba = B.get(f"áramlás {a}->{b}"), B.get(f"áramlás {b}->{a}")
+        if ab is None and ba is None:
+            continue
+        x = hourly_mean(ab.tz_convert("UTC")).reindex(f_idx) if ab is not None else pd.Series(np.nan, index=f_idx)
+        y = hourly_mean(ba.tz_convert("UTC")).reindex(f_idx) if ba is not None else pd.Series(np.nan, index=f_idx)
+        net = x.fillna(0) - y.fillna(0)
+        net[x.isna() & y.isna()] = np.nan
+        pairs.append({"a": a, "b": b, "mw": to_list(net)})
     B.close()
     out = {"generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "ENTSO-E Transparency Platform", "demo": False,
-           "names": EUROPE_ZONES, "ts": [], "zones": {}, "errors": B.errors + B.notes(), "missing": B.missing}
+           "names": EUROPE_ZONES, "ts": [], "zones": {}, "flow_ts": iso(f_idx), "flows": pairs,
+           "errors": B.errors + B.notes(), "missing": B.missing}
     if series:
         idx = pd.DatetimeIndex(sorted(set().union(*[set(s.index) for s in series.values()])))
         out["ts"] = iso(idx)
@@ -859,7 +887,7 @@ def main():
 
     eu_out = os.path.join(os.path.dirname(os.path.abspath(args.out)), "europe.json")
     try:
-        eu = collect_europe(client, budget_s=min(args.budget, 120), workers=args.workers)
+        eu = collect_europe(client, budget_s=min(args.budget, 240), workers=args.workers)
         if eu["zones"]:
             write_json(eu_out, eu)
             print(f"Kész: {eu_out} | zónák: {sorted(eu['zones'])} | hibák: {len(eu['errors'])}")

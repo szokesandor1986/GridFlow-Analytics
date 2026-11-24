@@ -251,6 +251,10 @@ function winChips(){
       box.appendChild(sp); box.appendChild(r);
     }
   });
+  try{
+    const hts = D.hourly_ts, have = hts.length > 1 ? Math.round((new Date(hts[hts.length - 1]) - new Date(hts[0])) / 3600e3) : 0;
+    ["winNet", "winPrice"].forEach(id => { if (have && have < Math.max(...WINS.map(w => w[0])) - 6){ const sp = document.createElement("span"); sp.style.cssText = "align-self:center;font-size:13px;color:var(--ink2)"; sp.textContent = "Az adat eddig csak kb. " + have + " órát fed le, ezért a hosszabb ablakok ugyanazt mutatják."; $(id).appendChild(sp); } });
+  }catch(e){}
   const nm = (WINS.find(x => x[0] === WIN) || [0, ""])[1];
   $("netTitle").textContent = "– " + nm;
   $("netChart").setAttribute("aria-label", "Nettó import, " + nm + ", óránként");

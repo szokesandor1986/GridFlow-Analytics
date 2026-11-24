@@ -224,6 +224,14 @@ text{font-family:inherit}
     <div class="chart" id="outTx"></div>
   </section>
 
+  <section class="card" id="cHupx" data-src="HUPX Inside Information Platform (REMIT bennfentes információk), iip.hupx.hu" style="display:none">
+    <h2>Kiesések a HUPX közlései szerint</h2>
+    <p class="hint">A magyar piaci szereplők REMIT szerint közzétett termelői kiesései a HUPX bennfentes információs platformjáról. Ez az ENTSO-E adatánál gyakran előbb és részletesebb szöveggel jelenik meg. A sáv hossza a kiesés időtartama, a szöveg a rendelkezésre álló teljesítményt mutatja. A nyitott végű kiesések 60 napig látszanak.</p>
+    <div class="chart" id="hxGantt"></div>
+    <h3>Legutóbbi közlemények</h3>
+    <div id="hxTable"></div>
+  </section>
+
   <section class="card" id="cBal" data-src="ENTSO-E Transparency Platform – havi pénzügyi mérleg (17.1.I), aggregált szabályozási energia ajánlatok és aktivált mennyiségek (GL EB 12.3.E), aktivált szabályozási energia ára (17.1.F), eltérési ár (17.1.G) és mennyiség (17.1.H)">
     <h2>Rendszeregyensúly <span class="zn"></span></h2>
     <p class="hint">Az eltérési ár és a szabályozási energia megmutatja, mikor volt feszes a rendszer, függetlenül a day-ahead ártól.</p>
@@ -318,7 +326,8 @@ let flowSel = "ALL", outSpan = 14;
 const WINS = [[24, "24 óra"], [48, "48 óra"], [72, "3 nap"], [168, "7 nap"]];
 const SEL = {zone:"HU", win:48, zoom:null};
 const OWN_FIRST = ["HU", "AT", "SK", "RO", "RS", "HR", "SI"];   // a szomszédok elöl
-const HU_ONLY = ["cFlow", "cUnits", "cOut"];
+const HU_ONLY = ["cFlow", "cUnits", "cOut", "cHupx"];
+let HX = null;
 
 async function getJson(url){
   const r = await fetch(url + "?t=" + Date.now(), {cache:"no-store"});
@@ -333,6 +342,7 @@ async function load(){
       getJson(demo ? "demo-data.json" : "data.json").catch(() => null)
     ]);
     E0 = e; D = d;
+    HX = await getJson(demo ? "demo-hupx.json" : "hupx.json").catch(() => null);
     C0 = await getJson(demo ? "demo-countries.json" : "countries.json").catch(() => null);
   }catch(err){
     $("snap").innerHTML = '<div class="err"><b>A mérnöki adat nem tölthető be.</b> (' + esc(err.message) + ')<br>Az <code>engineer.json</code> az adatgyűjtő első sikeres futása után jelenik meg. Ha a fájlt közvetlenül a gépedről nyitottad meg, indíts helyi szervert a mappában: <code>python3 -m http.server</code>.</div>';
@@ -421,6 +431,11 @@ function controls(){
   if (!C0) note = "A többi ország adata az adatgyűjtő első sikeres futása után jelenik meg.";
   else if (!hu) note = "Ennél az országnál a nettó import a day-ahead nettó pozícióból (menetrend) jön, nem fizikai mérésből. A határonkénti áramlás, a blokkszintű termelés, a kiesések és az aFRR/mFRR csak Magyarországra készül.";
   else note = "Magyarországnál a nettó import a határokon mért fizikai áramlás.";
+  try{
+    const H = (hu ? D : C0) || D || C0, hts = H && H.hourly_ts ? H.hourly_ts : [];
+    const have = hts.length > 1 ? Math.round((new Date(hts[hts.length - 1]) - new Date(hts[0])) / 3600e3) : 0, mxw = Math.max(...WINS.map(w => w[0]));
+    if (have && have < mxw) note += " Figyelem: az adatgyűjtés eddig csak kb. " + have + " órát tartalmaz, ezért a hosszabb ablakok ugyanazt mutatják; ez az adatgyűjtő következő (sikeres) futásaival bővül.";
+  }catch(e){}
   $("ctlNote").textContent = note + " Az óránkénti grafikonokon egérrel húzd végig a kívánt szakaszt a nagyításhoz, dupla kattintással vissza.";
 }
 
@@ -700,7 +715,7 @@ function chart(host, cfg){
 // ---------------------------------------------------------------- megjelenítés
 function render(){ banners(); meta(); controls(); snapshot(); legends(); chips(); renderCharts(); foot(); }
 function renderCharts(){
-  genSection(); loadSection(); resSection(); flowSection(); unitSection(); outSection(); balSection(); snspSection(); FQ.render();
+  genSection(); loadSection(); resSection(); flowSection(); unitSection(); outSection(); hupxSection(); balSection(); snspSection(); FQ.render();
 }
 
 function banners(){
@@ -1058,6 +1073,20 @@ function outSection(){
   const X = (E.outages_tx || []).slice().sort((a, b) => (a.planned - b.planned) || a.start.localeCompare(b.start));
   gantt($("outGen"), G, "Az ENTSO-E nem közölt termelő-kiesést erre az időszakra.");
   gantt($("outTx"), X, "Az ENTSO-E nem közölt határkeresztező hálózati kiesést erre az időszakra.");
+}
+
+function hupxSection(){
+  const card = $("cHupx");
+  if (!HX || !HX.items || !HX.items.length){ card.style.display = "none"; return; }
+  if (SEL.zone === "HU") card.style.display = "";
+  const lim = NOW.getTime() + 60 * 86400e3;
+  const L = HX.items.map(o => Object.assign({}, o, {end:o.open_end || !o.end ? new Date(Math.min(lim, new Date(o.start).getTime() + 60 * 86400e3)).toISOString() : o.end,
+    name:o.name + (o.participant ? " (" + o.participant + ")" : "")})).sort((a, b) => (a.planned - b.planned) || a.start.localeCompare(b.start));
+  gantt($("hxGantt"), L, "A HUPX nem közölt villamosenergia-kiesést erre az időszakra.");
+  const R = HX.items.slice().sort((a, b) => String(b.published).localeCompare(String(a.published))).slice(0, 12);
+  $("hxTable").innerHTML = '<div class="tbl"><table><thead><tr><th>Közzétéve</th><th>Egység</th><th>Típus</th><th class="r">Elérhető / névleges, MW</th><th>Időszak</th><th>Ok</th></tr></thead><tbody>' +
+    R.map(o => '<tr><td>' + (o.published ? fDate.format(new Date(o.published)) + " " + fTime.format(new Date(o.published)) : "–") + '</td><td>' + esc(o.name) + (o.participant ? '<br><span style="color:var(--ink2);font-size:12.5px">' + esc(o.participant) + '</span>' : "") + '</td><td>' + (o.planned ? "tervezett" : "nem tervezett") + '</td><td class="r num">' +
+      (o.avail_mw == null ? "?" : nf0.format(o.avail_mw)) + (o.nominal_mw ? " / " + nf0.format(o.nominal_mw) : "") + '</td><td>' + fDate.format(new Date(o.start)) + " – " + (o.open_end || !o.end ? "nyitott" : fDate.format(new Date(o.end))) + '</td><td>' + esc(o.reason_hu || o.reason || "") + '</td></tr>').join("") + '</tbody></table></div>';
 }
 
 // ---- rendszeregyensúly

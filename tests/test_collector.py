@@ -178,6 +178,12 @@ def test_europe():
     assert "HU" in eu["zones"] and "DE_LU" in eu["zones"] and "RS" not in eu["zones"], sorted(eu["zones"])
     assert len(eu["ts"]) >= 24 * 3 and all(len(v) == len(eu["ts"]) for v in eu["zones"].values())
     json.dumps(eu, allow_nan=False)
+    fl = eu["flows"]
+    assert len(eu["flow_ts"]) == 48 and all(len(f["mw"]) == 48 for f in fl)
+    got = {(f["a"], f["b"]) for f in fl}
+    assert ("HU", "AT") in got and ("DE_LU", "FR") in got, sorted(got)
+    ha = next(f for f in fl if (f["a"], f["b"]) == ("HU", "AT"))
+    assert any(v is not None for v in ha["mw"]) and all(v is None or abs(v) < 1e5 for v in ha["mw"])
     print(f"6. európai ár-pillanatkép rendben ({len(eu['zones'])} zóna)")
 
 

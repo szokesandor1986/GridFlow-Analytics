@@ -93,3 +93,15 @@ fr["demo"] = True
 fr["source"] = "DEMO – szintetikus adat, nem valós mérés"
 (ROOT / "demo-frequency.json").write_text(json.dumps(fr, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 print("frekvencia: napok", len(fr["daily"]), "| hibák", fr["errors"])
+
+# HUPX IIP (REMIT) kiesések: kitalált kliens
+hspec = importlib.util.spec_from_file_location("hupx", ROOT / "hupx.py")
+hx = importlib.util.module_from_spec(hspec)
+hspec.loader.exec_module(hx)
+from fake_hupx_client import FakeHupx  # noqa: E402
+_hn = _dt(2026, 11, 23, 13, 20, tzinfo=_tz.utc)
+hj = hx.collect(FakeHupx(n=9, page=4, now=_hn), "k", now=_hn)
+hj["demo"] = True
+hj["source"] = "DEMO – szintetikus adat, nem valós közlemény"
+(ROOT / "demo-hupx.json").write_text(json.dumps(hj, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+print("hupx: kiesések", hj["count"], "| hibák", hj["errors"])

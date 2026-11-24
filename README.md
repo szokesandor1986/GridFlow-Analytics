@@ -101,3 +101,17 @@ A `gas.py` naponta kétszer fut (`.github/workflows/gas.yml`), és a repó gyök
 ### Hálózati frekvencia a Mérnöki nézetben (`muszaki.html`, `freq.py`)
 
 A `freq.py` az Energy-Charts API (Fraunhofer ISE) `/v2/frequency` végpontját használja: a kontinentális európai szinkronterület frekvenciája, 1 másodperces felbontásban, kulcs nélkül (CC BY 4.0, forrásmegjelölés: energy-charts.info). A nyers adatot nem tároljuk: napi (UTC) összesítés készül (átlag, szórás, minimum/maximum időponttal, a ±50 és ±100 mHz-es sávon kívül töltött idő, legnagyobb df/dt, 10 mHz-es hisztogram), plusz az utolsó 24 óra percenkénti min/átlag/max sorozata. A korlát 2 kérés/perc, ezért futásonként legfeljebb 3 nap kérődik (a mai, a tegnapi és egy hiányzó régebbi), a 60 napos visszamenőleges sorozat így néhány óra alatt töltődik fel. Az előző állapotot az `update.yml` az élő oldalról tölti le (`frequency.json`), ezért nincs külön workflow és nincs commit. A tesztet a `tests/test_freq.py` adja (`python -I tests/test_freq.py`), a demó `muszaki.html?demo=1` (`demo-frequency.json`).
+
+## Európai áramlási térkép (4. kör)
+
+- `europa.html`: valódi országhatáros térkép (`europe-geo.json`, Natural Earth alapú) két kártyával: zónatérkép (ár, CO₂ stb.) és **áramlási térkép**.
+- Az áramlási térkép a 33 szomszédos zónapár fizikai határkeresztező áramlását (ENTSO-E 12.1.G) mutatja az elmúlt 48 órára; a nyíl vastagsága arányos a MW-tal, a zóna színe a térképen szereplő határok nettó pozíciója. Az óra csúszkával választható.
+- Adat: `collector.py` → `collect_europe` → `europe.json` (`flow_ts`, `flows`). Ez kb. 68 további ENTSO-E lekérdezés, ezért a `collect_europe` időkeretét szükség esetén emeld.
+- A fizikai áramlás nem a kereskedelmi menetrend; a nyilak egyenes vonalak a zónaközéppontok között, nem a tényleges vezetékek.
+
+## HUPX kiesések (REMIT) és az idősáv-figyelmeztetés (5. kör)
+
+- `hupx.py` a HUPX Inside Information Platformról (`iip.hupx.hu/api/v1/umm`, Bearer-kulcs) kéri le a villamosenergia-kiesések legfrissebb verzióit (7 nappal ezelőttől 45 napra előre), és `hupx.json`-t készít. A Mérnöki nézet "Kiesések a HUPX közlései szerint" kártyája ezt mutatja (Gantt-sáv és táblázat az okkal).
+- **Kulcs:** GitHub → Settings → Secrets and variables → Actions → New repository secret, név: `HUPX_KEY`. Kulcs nélkül vagy hiba esetén a lépés kimarad, a kártya nem jelenik meg, a közzététel megtörténik.
+- A HUPX feltételei szerint a HUPX-adat továbbhasznosítása szerződéshez kötött lehet; ezt a kulcshoz tartozó feltételek alapján ellenőrizd.
+- Az Áttekintés és a Mérnöki nézet óránkénti idősáv-választója mellett figyelmeztetés jelenik meg, ha az éles adat rövidebb a választott ablaknál (ilyenkor a hosszabb ablakok ugyanazt mutatják).

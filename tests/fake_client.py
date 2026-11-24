@@ -121,6 +121,13 @@ class FakeClient:
 
     # ---------- áramlás és ár
     def query_crossborder_flows(self, a, b, start, end, **kw):
+        if "HU" not in (a, b):          # nem magyar határ: kitalált, de determinisztikus áramlás
+            if "UA" in (a, b):
+                raise NoMatchingDataError
+            seed = sum(map(ord, min(a, b))) % 7
+            sgn = 1 if a < b else -1
+            f2 = lambda idx: np.maximum(sgn * (300 + 150 * seed) * np.sin(idx.asi8 / 3.6e12 / 9 + seed), 0)  # noqa: E731
+            return self._ser(f2, start, min(end, self.now.floor("h")), "h")
         nb = b if a == "HU" else a
         if nb == "UA":
             raise NoMatchingDataError
