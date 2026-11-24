@@ -1,6 +1,6 @@
 name: Gáz adatok
 
-# Földgáz-tározók (GIE AGSI+) és magyar határpontok (ENTSOG) a "Gáztározók" oldalhoz (gas.json).
+# Földgáz-tározók (GIE AGSI+), LNG-terminálok (GIE ALSI) és magyar határpontok (ENTSOG) a Földgáz oldalhoz (gas.json).
 # Naponta kétszer fut (az AGSI+ adatai este ~19:30 CET körül jelennek meg, a második kör a korrekciókat hozza),
 # és kézzel is indítható: Actions -> Gáz adatok -> Run workflow.
 # Az eredmény a repó "data" ágára kerül (gas.json), nem a main-re, így nem ütközik a feltöltésekkel;

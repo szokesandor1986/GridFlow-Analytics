@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -49,7 +49,7 @@ jobs:
         run: |
           mkdir -p dist
           python collector.py --out dist/data.json
-          cp index.html muszaki.html europa.html demo-data.json demo-engineer.json demo-europe.json demo-history.json demo-gas.json demo-frequency.json dist/
+          cp index.html muszaki.html europa.html foldgaz.html demo-data.json demo-engineer.json demo-europe.json demo-countries.json demo-history.json demo-gas.json demo-frequency.json dist/
           cp history.json gas.json dist/ 2>/dev/null || true
 
       # Hálózati frekvencia (Energy-Charts, kulcs nélkül). Az előző állapotot (napi összesítések) az élő oldalról
