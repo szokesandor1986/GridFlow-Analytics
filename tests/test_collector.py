@@ -177,7 +177,7 @@ def test_europe():
     eu = col.collect_europe(col.GroupClient(FakeClient(NOW)), now=NOW, budget_s=60)
     assert "HU" in eu["zones"] and "DE_LU" in eu["zones"] and "RS" not in eu["zones"], sorted(eu["zones"])
     assert len(eu["ts"]) >= 24 * 3 and all(len(v) == len(eu["ts"]) for v in eu["zones"].values())
-    assert {"SE", "NO", "DK", "FI", "PL"} <= set(eu["zones"]) and "UA" not in eu["zones"], sorted(eu["zones"])
+    assert {"SE", "NO", "DK", "FI", "PL", "NO_1", "SE_3", "DK_2", "IT_SICI", "GB", "BY"} <= set(eu["zones"]), sorted(eu["zones"])
     json.dumps(eu, allow_nan=False)
     fl = eu["flows"]
     assert len(eu["flow_ts"]) == 48 and all(len(f["mw"]) == 48 for f in fl)

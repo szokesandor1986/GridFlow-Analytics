@@ -54,9 +54,22 @@ EUROPE_EXTRA = {
     "DK": "Dánia", "NO": "Norvégia", "SE": "Svédország", "FI": "Finnország", "EE": "Észtország", "LV": "Lettország",
     "LT": "Litvánia", "IE": "Írország", "BA": "Bosznia-Hercegovina", "ME": "Montenegró", "MK": "Észak-Macedónia",
     "AL": "Albánia", "XK": "Koszovó", "MD": "Moldova", "UA": "Ukrajna", "TR": "Törökország", "MT": "Málta",
-    "CY": "Ciprus", "GE": "Grúzia",
+    "CY": "Ciprus", "GE": "Grúzia", "GB": "Egyesült Királyság", "BY": "Belarusz", "IS": "Izland",
 }
 EUROPE_ZONES = {**EUROPE_CORE, **EUROPE_EXTRA}
+# Az ENTSO-E térképén szereplő, de lekérdezhető adat nélküli országok (csak a térképen jelennek meg, névvel).
+GEO_ONLY = {"RU": "Oroszország", "AM": "Örményország", "AZ": "Azerbajdzsán"}
+# Ajánlati zónák (a zónatérképen az országok helyett ezek jelennek meg; az országos érték az összesített, fent).
+SUBZONES = {
+    "NO_1": "Norvégia NO1 (délkelet)", "NO_2": "Norvégia NO2 (délnyugat)", "NO_3": "Norvégia NO3 (közép)", "NO_4": "Norvégia NO4 (észak)", "NO_5": "Norvégia NO5 (nyugat)",
+    "SE_1": "Svédország SE1 (észak)", "SE_2": "Svédország SE2", "SE_3": "Svédország SE3", "SE_4": "Svédország SE4 (dél)",
+    "DK_1": "Dánia DK1 (nyugat)", "DK_2": "Dánia DK2 (kelet)",
+    "IT_CNOR": "Olaszország – közép-észak", "IT_CSUD": "Olaszország – közép-dél", "IT_SUD": "Olaszország – dél",
+    "IT_CALA": "Olaszország – Calabria", "IT_SICI": "Olaszország – Szicília", "IT_SARD": "Olaszország – Szardínia",
+}
+ALL_ZONES = {**EUROPE_ZONES, **SUBZONES}
+# Ahol egy ország több azonosítón is szerepel, sorban próbáljuk, az első működőt használjuk.
+ZONE_FIRST = {"UA": ["UA_IPS", "UA"]}
 # Több ajánlati zónás országok: országszinten vonjuk össze (ár: átlag, fogyasztás/termelés/pozíció: összeg).
 ZONE_GROUPS = {
     "DK": ["DK_1", "DK_2"], "NO": ["NO_1", "NO_2", "NO_3", "NO_4", "NO_5"], "SE": ["SE_1", "SE_2", "SE_3", "SE_4"],
@@ -95,6 +108,7 @@ class GroupClient:
 
     def __init__(self, base):
         self._b = base
+        self._memo, self._lock = {}, __import__("threading").Lock()
 
     def __getattr__(self, name):
         fn = getattr(self._b, name)
@@ -109,17 +123,49 @@ class GroupClient:
     def _expand(code):
         return ZONE_GROUPS.get(code, [code]) if isinstance(code, str) else [code]
 
+    def _one(self, name, fn, combo, rest, k):
+        """Egy tényleges ENTSO-E hívás, memoizálva: az országos összevonás és a zónatérkép ugyanazt a tagzónát nem kéri le kétszer."""
+        key = (name, combo, tuple(str(x) for x in rest), tuple(sorted((a, str(v)) for a, v in k.items())))
+        with self._lock:
+            hit = self._memo.get(key)
+        if hit is not None:
+            return hit
+        try:
+            res = fn(*combo, *rest, **k)
+        except Exception:  # noqa: BLE001  (hibát nem tárolunk, az újrapróbálkozás friss lekérdezés legyen)
+            raise
+        with self._lock:
+            self._memo[key] = res
+        return res
+
     def _call(self, name, fn, a, k):
-        if not a or not any(isinstance(x, str) and x in ZONE_GROUPS for x in a[:2]):
-            return fn(*a, **k)
-        if name == "query_crossborder_flows":
-            combos = [(x, y) for x in self._expand(a[0]) for y in self._expand(a[1])]
-        else:
-            combos = [(z,) for z in self._expand(a[0])]
+        special = lambda x: isinstance(x, str) and (x in ZONE_GROUPS or x in ZONE_FIRST)
+        if not a or not any(special(x) for x in a[:2]):
+            return self._one(name, fn, tuple(a[:2]) if name == "query_crossborder_flows" else tuple(a[:1]), a[2:] if name == "query_crossborder_flows" else a[1:], k)
+        nz = 2 if name == "query_crossborder_flows" else 1
+        rest = a[nz:]
+
+        def alts(code):
+            return ZONE_FIRST.get(code, ZONE_GROUPS.get(code, [code])) if isinstance(code, str) else [code]
+        first_mode = [x for x in a[:nz] if isinstance(x, str) and x in ZONE_FIRST]
+        if first_mode:
+            err = None
+            options = [(x, y) for x in alts(a[0]) for y in alts(a[1])] if nz == 2 else [(z,) for z in alts(a[0])]
+            for combo in options:
+                try:
+                    res = self._one(name, fn, combo, rest, k)
+                    if res is not None and len(res):
+                        return res
+                except Exception as e:  # noqa: BLE001
+                    err = e
+            if err:
+                raise err
+            raise ValueError("üres válasz")
+        combos = [(x, y) for x in alts(a[0]) for y in alts(a[1])] if nz == 2 else [(z,) for z in alts(a[0])]
         parts, err = [], None
         for combo in combos:
             try:
-                parts.append(fn(*combo, *a[len(combo):], **k))
+                parts.append(self._one(name, fn, combo, rest, k))
             except Exception as e:     # egy tagzóna hiánya nem akadály
                 err = e
         if not parts:
@@ -135,7 +181,6 @@ class GroupClient:
         for p in parts[1:]:
             out = out.add(p, fill_value=0)
         return out
-
 
 
 class Batch:
@@ -778,6 +823,7 @@ EUROPE_PAIRS = [
     ("HU", "UA"), ("SK", "UA"), ("PL", "UA"), ("RO", "UA"), ("RO", "MD"), ("UA", "MD"),
     ("BG", "TR"), ("GR", "TR"), ("GR", "AL"), ("GR", "MK"), ("BG", "MK"), ("RS", "MK"), ("RS", "ME"), ("RS", "BA"),
     ("HR", "BA"), ("BA", "ME"), ("ME", "AL"), ("AL", "XK"), ("RS", "XK"), ("MK", "XK"), ("ME", "XK"), ("IT_NORD", "ME"), ("IE", "FR"),
+    ("GB", "FR"), ("GB", "NL"), ("GB", "BE"), ("GB", "NO"), ("GB", "DK"), ("GB", "IE"), ("BY", "PL"), ("BY", "LT"), ("BY", "UA"), ("TR", "GE"),
 ]
 
 
@@ -787,14 +833,14 @@ def collect_europe(client, now=None, budget_s=120, workers=8):
     local = now.tz_convert("Europe/Budapest").normalize()
     p_start, p_end = local - pd.Timedelta(days=2), local + pd.Timedelta(days=2)
     B = Batch(budget_s, workers=workers)
-    for z in EUROPE_ZONES:
+    for z in ALL_ZONES:
         B.add(f"ár {z}", lambda z=z: client.query_day_ahead_prices(z, start=p_start, end=p_end))
     f_start, f_end = now.floor("h") - pd.Timedelta(hours=47), now.floor("h") + pd.Timedelta(hours=1)
     for a, b in EUROPE_PAIRS:        # fizikai áramlás mindkét irányban; a nettó a két irány különbsége
         B.add(f"áramlás {a}->{b}", lambda a=a, b=b: client.query_crossborder_flows(a, b, start=f_start, end=f_end))
         B.add(f"áramlás {b}->{a}", lambda a=a, b=b: client.query_crossborder_flows(b, a, start=f_start, end=f_end))
     series = {}
-    for z in EUROPE_ZONES:
+    for z in ALL_ZONES:
         s = B.get(f"ár {z}")
         if s is not None:
             series[z] = hourly_mean(s.tz_convert("UTC"))
@@ -811,7 +857,7 @@ def collect_europe(client, now=None, budget_s=120, workers=8):
         pairs.append({"a": a, "b": b, "mw": to_list(net)})
     B.close()
     out = {"generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "source": "ENTSO-E Transparency Platform", "demo": False,
-           "names": EUROPE_ZONES, "ts": [], "zones": {}, "flow_ts": iso(f_idx), "flows": pairs,
+           "names": {**ALL_ZONES, **GEO_ONLY}, "ts": [], "zones": {}, "flow_ts": iso(f_idx), "flows": pairs,
            "errors": B.errors + B.notes(), "missing": B.missing}
     if series:
         idx = pd.DatetimeIndex(sorted(set().union(*[set(s.index) for s in series.values()])))
@@ -837,7 +883,7 @@ def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zone
     Az előjelet zónánként ellenőrizzük: a nettó importnak a fogyasztás és a hazai termelés különbségével
     egyirányban kell mozognia. Ha a korreláció egyértelműen negatív, a sorozatot megfordítjuk, és ezt a "netpos_flipped" jelzi."""
     now = now or pd.Timestamp.now(tz="UTC")
-    zones = [z for z in (zones or EUROPE_ZONES) if z != HOME]
+    zones = [z for z in (zones or ALL_ZONES) if z != HOME]
     start = (now - pd.Timedelta(hours=hours)).floor("h")
     local = now.tz_convert("Europe/Budapest").normalize()
     end = (local + pd.DateOffset(days=2)).tz_convert("UTC")
@@ -906,7 +952,7 @@ def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zone
         "source": "ENTSO-E Transparency Platform",
         "demo": False,
         "hourly_ts": iso(idx),
-        "names": {z: EUROPE_ZONES[z] for z in zones},
+        "names": {z: ALL_ZONES[z] for z in zones},
         "zones": out_z,
         "co2": {"factors": CO2_FACTORS, "source": CO2_SOURCE},
         "netpos_corr": corr_log,
@@ -929,9 +975,9 @@ def main():
     p.add_argument("--engineer-out", default=None, help="alapértelmezés: engineer.json a --out mellett")
     p.add_argument("--skip-engineer", action="store_true", help="a mérnöki adatkörök kihagyása")
     p.add_argument("--hours", type=int, default=168, help="ennyi órára visszamenőleg kéri az adatokat (az oldalak időablaka ebből választ)")
-    p.add_argument("--countries-budget", type=int, default=150, help="az országadatok időkerete másodpercben")
+    p.add_argument("--countries-budget", type=int, default=300, help="az országadatok időkerete másodpercben")
     p.add_argument("--skip-countries", action="store_true", help="az országválasztó adatainak (countries.json) kihagyása")
-    p.add_argument("--workers", type=int, default=8, help="egyszerre ennyi ENTSO-E kérés fut")
+    p.add_argument("--workers", type=int, default=12, help="egyszerre ennyi ENTSO-E kérés fut")
     p.add_argument("--budget", type=int, default=240, help="a fő és a mérnöki rész időkerete külön-külön, másodpercben")
     args = p.parse_args()
 
