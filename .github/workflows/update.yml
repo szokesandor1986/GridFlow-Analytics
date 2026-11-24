@@ -39,6 +39,7 @@ jobs:
           python -I tests/test_collector.py
           python -I tests/test_freq.py
           python -I tests/test_hupx.py
+          python -I tests/test_jao.py
 
       # A gáz- és a hosszú távú adat a "data" ágon él (a gyűjtő workflow-k oda mentenek); ha még nincs, a main példánya marad.
       - name: Tárolt adatok betöltése (data ág)
@@ -50,7 +51,7 @@ jobs:
         run: |
           mkdir -p dist
           python collector.py --out dist/data.json
-          cp index.html muszaki.html europa.html foldgaz.html europe-geo.json demo-data.json demo-engineer.json demo-europe.json demo-countries.json demo-history.json demo-gas.json demo-frequency.json demo-hupx.json dist/
+          cp index.html muszaki.html europa.html foldgaz.html europe-geo.json hu-geo.json demo-data.json demo-engineer.json demo-europe.json demo-countries.json demo-history.json demo-gas.json demo-frequency.json demo-hupx.json dist/
           cp history.json gas.json dist/ 2>/dev/null || true
 
       # Hálózati frekvencia (Energy-Charts, kulcs nélkül). Az előző állapotot (napi összesítések) az élő oldalról
@@ -71,6 +72,12 @@ jobs:
         env:
           HUPX_KEY: ${{ secrets.HUPX_KEY }}
         run: python hupx.py --out dist/hupx.json
+
+      # JAO (Core flow-based) felderítő próba: a mezőneveket a logban és a jao_probe.json-ban rögzíti. Hiba esetén nem akadályoz.
+      - name: JAO felderítő próba
+        continue-on-error: true
+        timeout-minutes: 5
+        run: python jao.py --out dist/jao_probe.json
 
       - uses: actions/upload-pages-artifact@v5
         with:
