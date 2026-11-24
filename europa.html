@@ -686,23 +686,26 @@ function mapPanel(M, nm){
   host.innerHTML = '<h3 style="margin:14px 0 8px">' + esc(nm(z)) + (mapPin ? "" : ' <small style="font-weight:500;color:var(--muted)">(kattints egy másik országra a váltáshoz)</small>') + '</h3>' + (M.win ? '<p class="note" style="margin:0 0 8px">Időablak: ' + esc(M.win.label) + '.</p>' : '') + '<div class="ptiles">' + tiles.join("") + '</div>' + spark + (fq ? '<p class="note">' + esc(fq.trim()) + '</p>' : "");
 }
 
-function mapSection(){
+let mapSeen = new Set();
+function mapSection(keep){
   const card = $("cMap");
   if (!EU && !H){ card.style.display = "none"; return; }
   const M = mapModel();
   if (GEO && GEO.sub) Object.values(M.v).forEach(dv => Object.keys(GEO.sub).forEach(z => { const par = GEO.subParent[z]; if (!has(dv[z]) && ["NO", "SE", "DK"].includes(par) && has(dv[par])) dv[z] = dv[par]; }));   // amíg a zónaadat nem érkezik meg, az országos érték látszik
-  const avail = MAP_METRICS.filter(m => M.v[m.k] && Object.keys(M.v[m.k]).length >= 4);
+  // a gombok listája nem függ a kiválasztott órától: ami egyszer elérhető volt, az marad (egy órában hiányozhat adat)
+  MAP_METRICS.forEach(m => { if (M.v[m.k] && Object.keys(M.v[m.k]).length >= 4) mapSeen.add(m.k); });
+  const avail = MAP_METRICS.filter(m => mapSeen.has(m.k));
   if (!avail.length){ card.style.display = "none"; return; }
   card.style.display = "";
   if (!avail.some(m => m.k === mapMetric)) mapMetric = avail[0].k;
-  const cur = MAP_METRICS.find(m => m.k === mapMetric), vals = M.v[mapMetric], names = (EU && EU.names) || (H && H.names) || {}, nm = (z) => names[z] || FALLBACK_NAMES[z] || z;
-  const chips = $("mapChips"); chips.innerHTML = "";
-  avail.forEach(m => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(m.k === mapMetric)); b.textContent = m.n; b.addEventListener("click", () => { mapMetric = m.k; mapSection(); }); chips.appendChild(b); });
+  const cur = MAP_METRICS.find(m => m.k === mapMetric), vals = M.v[mapMetric] || {}, names = (EU && EU.names) || (H && H.names) || {}, nm = (z) => names[z] || FALLBACK_NAMES[z] || z;
+  const chips = $("mapChips"); if (!keep) chips.innerHTML = "";
+  if (!keep) avail.forEach(m => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(m.k === mapMetric)); b.textContent = m.n; b.addEventListener("click", () => { mapMetric = m.k; mapSection(); }); chips.appendChild(b); });
 
   // időablak: az elmúlt 24 óra átlaga (alap) vagy egy kiválasztott óra
   const tc = $("mapTime"), S_ = M.S, shortM = ["avg12", "neg12"].includes(mapMetric);
-  tc.innerHTML = ""; tc.style.display = shortM ? "none" : "";
-  if (!shortM){
+  if (!keep){ tc.innerHTML = ""; tc.style.display = shortM ? "none" : ""; }
+  if (!shortM && !keep){
     const mk = (txt, mode) => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(mapTime.mode === mode)); b.textContent = txt; b.addEventListener("click", () => { mapTime.mode = mode; if (mode === "hour") mapTime.i = null; mapSection(); }); return b; };
     tc.appendChild(mk("Elmúlt 24 óra átlaga", "24h")); tc.appendChild(mk("Óránként", "hour"));
     if (mapTime.mode === "hour"){
@@ -710,13 +713,13 @@ function mapSection(){
       const lo = Math.max(0, M.win.now - 120), hi = Math.min(S_.grid.length - 1, M.win.now + 36);
       const sl = document.createElement("input"); sl.type = "range"; sl.min = lo; sl.max = hi; sl.step = 1; sl.value = M.win.from; sl.setAttribute("aria-label", "Óra kiválasztása");
       const lb = document.createElement("span"); lb.className = "num"; lb.textContent = M.win.label;
-      sl.addEventListener("input", () => { mapTime.i = +sl.value; lb.textContent = fDate.format(new Date(S_.grid[mapTime.i])) + " " + fTime.format(new Date(S_.grid[mapTime.i])); clearTimeout(mapTime.tm); mapTime.tm = setTimeout(mapSection, 60); });
+      sl.addEventListener("input", () => { mapTime.i = +sl.value; lb.textContent = fDate.format(new Date(S_.grid[mapTime.i])) + " " + fTime.format(new Date(S_.grid[mapTime.i])); clearTimeout(mapTime.tm); mapTime.tm = setTimeout(() => mapSection(true), 40); });
       w.appendChild(sl); w.appendChild(lb); tc.appendChild(w);
     }
   }
 
   // színskála
-  const arr = Object.values(vals).slice().sort((a, b) => a - b), q = (p) => arr[Math.min(arr.length - 1, Math.floor(arr.length * p))];
+  const arr = Object.values(vals).slice().sort((a, b) => a - b), q = (p) => arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : 0;
   const neutral = rgbOf(css("--neutral")), surf = css("--surface");
   let color, legendHtml;
   if (cur.kind === "price"){
@@ -733,7 +736,7 @@ function mapSection(){
     color = (v) => v >= 0 ? mixRgb(neutral, pos, Math.min(1, v / m_)) : mixRgb(neutral, negc, Math.min(1, -v / m_));
     legendHtml = '<span><svg width="150" height="12"><defs><linearGradient id="mg"><stop offset="0" stop-color="' + rgbStr(negc) + '"/><stop offset=".5" stop-color="' + rgbStr(neutral) + '"/><stop offset="1" stop-color="' + rgbStr(pos) + '"/></linearGradient></defs><rect width="150" height="12" rx="3" fill="url(#mg)"/></svg>' + nf0.format(-m_) + ' · 0 · +' + nf0.format(m_) + ' ' + cur.u + '</span>';
   }
-  $("mapLegend").innerHTML = legendHtml + '<span><svg width="12" height="12"><rect x=".5" y=".5" width="11" height="11" rx="3" fill="none" stroke="' + css("--ink2") + '" stroke-dasharray="2 2"/></svg>nincs érték a gyűjtésben</span>';
+  $("mapLegend").innerHTML = legendHtml + '<span><svg width="12" height="12"><rect x=".5" y=".5" width="11" height="11" rx="3" fill="none" stroke="' + css("--ink2") + '" stroke-dasharray="2 2"/></svg>nincs érték a gyűjtésben</span>' + (arr.length < 1 ? '<span><b>Erre az órára ennél a mutatónál még nincs közölt adat.</b></span>' : '');
 
   // rajz
   const host = $("mapChart"); host.innerHTML = "";
