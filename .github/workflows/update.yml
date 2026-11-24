@@ -35,7 +35,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Gyűjtő tesztje (kitalált klienssel, hálózat nélkül)
-        run: python -I tests/test_collector.py
+        run: |
+          python -I tests/test_collector.py
+          python -I tests/test_freq.py
+
+      # A gáz- és a hosszú távú adat a "data" ágon él (a gyűjtő workflow-k oda mentenek); ha még nincs, a main példánya marad.
+      - name: Tárolt adatok betöltése (data ág)
+        run: bash scripts/load_data.sh history.json gas.json
 
       - name: Adatgyűjtés az ENTSO-E-ről
         env:
@@ -43,8 +49,18 @@ jobs:
         run: |
           mkdir -p dist
           python collector.py --out dist/data.json
-          cp index.html muszaki.html europa.html gaz.html demo-data.json demo-engineer.json demo-europe.json demo-history.json demo-gas.json dist/
+          cp index.html muszaki.html europa.html demo-data.json demo-engineer.json demo-europe.json demo-history.json demo-gas.json demo-frequency.json dist/
           cp history.json gas.json dist/ 2>/dev/null || true
+
+      # Hálózati frekvencia (Energy-Charts, kulcs nélkül). Az előző állapotot (napi összesítések) az élő oldalról
+      # töltjük le, így nem kell a repóba commitolni. Hiba esetén a közzététel akkor is megtörténik.
+      - name: Frekvencia (Energy-Charts)
+        continue-on-error: true
+        timeout-minutes: 8
+        run: |
+          mkdir -p dist
+          curl -fsS --max-time 30 "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/frequency.json" -o dist/frequency.json || rm -f dist/frequency.json
+          python freq.py --out dist/frequency.json --max-fetch 3
 
       - uses: actions/upload-pages-artifact@v5
         with:
