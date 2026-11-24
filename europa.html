@@ -91,6 +91,8 @@ h2.grp{font-size:22px;margin:38px 0 -4px;letter-spacing:-.01em}
 #cWin .winlabel{font-size:13px;color:var(--ink2)}
 .chip:disabled{opacity:.4;cursor:default}
 text{font-family:inherit}
+#mapChips .msel{display:none;font:inherit;font-size:14px;padding:7px 12px;border:1px solid var(--grid);border-radius:999px;background:var(--surface);color:var(--ink);max-width:100%}
+@media (max-width:640px){#mapChips .chip{display:none}#mapChips .msel{display:block;width:100%}}
 </style>
 </head>
 <body>
@@ -184,6 +186,7 @@ text{font-family:inherit}
   </section>
   <section class="card" id="cYear" data-src="ENTSO-E Transparency Platform – havi összesítés (history.json), saját számítás"></section>
   <footer id="foot"></footer>
+  <p class="note" style="text-align:center;margin:6px 0 24px" id="ver">Oldalverzió: 2026-11-24 / 3</p>
 </main>
 
 <script>
@@ -538,14 +541,16 @@ const MAP_METRICS = [
 // ---------- nagyítható / húzható térkép (viewBox alapú). A nézet térképenként megmarad az újrarajzoláskor.
 const MVIEW = {};
 function mapZoomable(host, svg, G, Wd, key, onChange){
-  const st = MVIEW[key] = MVIEW[key] || {s:1, cx:G.W / 2, cy:G.H / 2}, r = Wd / G.W;
+  // alapnézet: Európa magja (Izland–Ciprus); a világ többi része kicsinyítéssel és húzással elérhető
+  const DEF = G.W === 1100 && G.H === 900 ? {s:1.6, cx:490, cy:425} : {s:1, cx:G.W / 2, cy:G.H / 2};
+  const st = MVIEW[key] = MVIEW[key] || Object.assign({}, DEF), r = Wd / G.W;
   st.dragged = false;
   const clampv = () => { st.s = Math.max(1, Math.min(16, st.s)); const vw = G.W / st.s, vh = G.H / st.s; st.cx = Math.max(vw / 2, Math.min(G.W - vw / 2, st.cx)); st.cy = Math.max(vh / 2, Math.min(G.H - vh / 2, st.cy)); };
   let raf = 0;
   const apply = (notify) => {
     clampv(); const vw = G.W / st.s, vh = G.H / st.s;
     svg.setAttribute("viewBox", [st.cx - vw / 2, st.cy - vh / 2, vw, vh].join(" "));
-    svg.style.touchAction = st.s > 1 ? "none" : "pan-y"; svg.style.cursor = st.s > 1 ? "grab" : "";
+    svg.style.touchAction = st.s > DEF.s + .01 ? "none" : "pan-y"; svg.style.cursor = st.s > 1 ? "grab" : "";
     if (notify && onChange){ cancelAnimationFrame(raf); raf = requestAnimationFrame(() => onChange(st, r)); }
   };
   const zoomAt = (f, px, py) => {
@@ -554,7 +559,7 @@ function mapZoomable(host, svg, G, Wd, key, onChange){
   };
   const toMap = (ev) => { const b = svg.getBoundingClientRect(), vb = svg.viewBox.baseVal; return [vb.x + (ev.clientX - b.left) / b.width * vb.width, vb.y + (ev.clientY - b.top) / b.height * vb.height]; };
   const bar = document.createElement("div"); bar.className = "mz";
-  [["+", "Nagyítás", () => zoomAt(1.6, st.cx, st.cy)], ["−", "Kicsinyítés", () => zoomAt(1 / 1.6, st.cx, st.cy)], ["⟲", "Alaphelyzet", () => { st.s = 1; st.cx = G.W / 2; st.cy = G.H / 2; apply(true); }]].forEach(([t, ttl, fn]) => {
+  [["+", "Nagyítás", () => zoomAt(1.6, st.cx, st.cy)], ["−", "Kicsinyítés", () => zoomAt(1 / 1.6, st.cx, st.cy)], ["⟲", "Alaphelyzet", () => { st.s = DEF.s; st.cx = DEF.cx; st.cy = DEF.cy; apply(true); }]].forEach(([t, ttl, fn]) => {
     const b = document.createElement("button"); b.type = "button"; b.textContent = t; b.title = ttl; b.setAttribute("aria-label", ttl); b.addEventListener("click", fn); bar.appendChild(b);
   });
   host.appendChild(bar);
@@ -701,8 +706,14 @@ function mapSection(keep){
   const cur = MAP_METRICS.find(m => m.k === mapMetric), vals = M.v[mapMetric] || {}, names = (EU && EU.names) || (H && H.names) || {}, nm = (z) => names[z] || FALLBACK_NAMES[z] || z;
   const chips = $("mapChips"); if (!keep) chips.innerHTML = "";
   if (!keep) avail.forEach(m => { const b = document.createElement("button"); b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed", String(m.k === mapMetric)); b.textContent = m.n; b.addEventListener("click", () => { mapMetric = m.k; mapSection(); }); chips.appendChild(b); });
+  if (!keep){   // keskeny kijelzőn a mutatók egyetlen legördülő listában vannak (a gombsor fél képernyőt foglalna)
+    const sel = document.createElement("select"); sel.className = "msel"; sel.setAttribute("aria-label", "Mutató");
+    avail.forEach(m => { const o = document.createElement("option"); o.value = m.k; o.textContent = m.n; if (m.k === mapMetric) o.selected = true; sel.appendChild(o); });
+    sel.addEventListener("change", () => { mapMetric = sel.value; mapSection(); }); chips.appendChild(sel);
+  }
 
   // időablak: az elmúlt 24 óra átlaga (alap) vagy egy kiválasztott óra
+  if (keep && mapTime.mode === "hour" && mapTime.lb) mapTime.lb.textContent = M.win.label;
   const tc = $("mapTime"), S_ = M.S, shortM = ["avg12", "neg12"].includes(mapMetric);
   if (!keep){ tc.innerHTML = ""; tc.style.display = shortM ? "none" : ""; }
   if (!shortM && !keep){
@@ -710,11 +721,19 @@ function mapSection(keep){
     tc.appendChild(mk("Elmúlt 24 óra átlaga", "24h")); tc.appendChild(mk("Óránként", "hour"));
     if (mapTime.mode === "hour"){
       const w = document.createElement("div"); w.className = "mtl";
-      const lo = Math.max(0, M.win.now - 120), hi = Math.min(S_.grid.length - 1, M.win.now + 36);
-      const sl = document.createElement("input"); sl.type = "range"; sl.min = lo; sl.max = hi; sl.step = 1; sl.value = M.win.from; sl.setAttribute("aria-label", "Óra kiválasztása");
+      // a csúszka csak olyan órákon mozog, amelyekre az adott mutatóhoz legalább 4 zónában van érték: így nem lehet üres térképre húzni
+      const srcK = {price:"price", diff:"price", gen:"gen", co2:"gen", res:"gen", load:"load", net:"net"}[mapMetric] || "gen", zsr = Object.values(S_.z);
+      const okAt = (i) => zsr.reduce((c, r) => c + (has(r[srcK][i]) ? 1 : 0), 0) >= 4;
+      let lo = Math.max(0, M.win.now - 120), hi = Math.min(S_.grid.length - 1, M.win.now + 36);
+      while (hi > lo && !okAt(hi)) hi--;
+      while (lo < hi && !okAt(lo)) lo++;
+      if (mapTime.i == null || mapTime.i > hi) mapTime.i = hi;
+      if (mapTime.i < lo) mapTime.i = lo;
+      const sl = document.createElement("input"); sl.type = "range"; sl.min = lo; sl.max = hi; sl.step = 1; sl.value = mapTime.i; sl.setAttribute("aria-label", "Óra kiválasztása");
       const lb = document.createElement("span"); lb.className = "num"; lb.textContent = M.win.label;
       sl.addEventListener("input", () => { mapTime.i = +sl.value; lb.textContent = fDate.format(new Date(S_.grid[mapTime.i])) + " " + fTime.format(new Date(S_.grid[mapTime.i])); clearTimeout(mapTime.tm); mapTime.tm = setTimeout(() => mapSection(true), 40); });
-      w.appendChild(sl); w.appendChild(lb); tc.appendChild(w);
+      mapTime.lb = lb; w.appendChild(sl); w.appendChild(lb); tc.appendChild(w);
+      if (mapTime.i !== M.win.from){ mapSection(true); return; }
     }
   }
 

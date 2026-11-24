@@ -145,6 +145,7 @@ text{font-family:inherit}
   </section>
 
   <footer id="foot"></footer>
+  <p class="note" style="text-align:center;margin:6px 0 24px" id="ver">Oldalverzió: 2026-11-24 / 3</p>
 </main>
 
 <script>
@@ -401,6 +402,8 @@ function huFlowMap(host, G, rows, o){
   const hc = G.labels.HU;
   if (o.center){ const t1 = el("text", {x:hc[0], y:hc[1], "text-anchor":"middle", "font-size":fs * 1.15, "font-weight":700, fill:ink, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t1.textContent = o.center[0];
     const t2 = el("text", {x:hc[0], y:hc[1] + fs * 1.3, "text-anchor":"middle", "font-size":fs, fill:ink2, stroke:surf, "stroke-width":3.2 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); t2.textContent = o.center[1]; }
+  if (cw >= 600 && host.parentNode){ const o0 = host.parentNode.querySelector(".mhint"); if (o0) o0.remove(); }
+  if (cw < 600 && host.parentNode && !host.parentNode.querySelector(".mhint")){ const h = document.createElement("p"); h.className = "note mhint"; h.textContent = "↔ A térkép szélesebb a kijelzőnél: húzd oldalra a teljes képhez."; host.parentNode.insertBefore(h, host.nextSibling); }
   const bp = G.cities.Budapest; el("circle", {cx:bp[0], cy:bp[1], r:3 * k, fill:ink}, svg);
   const bt = el("text", {x:bp[0] + 6 * k, y:bp[1] + 4 * k, "font-size":fs * .9, fill:ink2, stroke:surf, "stroke-width":3 * k, "paint-order":"stroke", "pointer-events":"none"}, svg); bt.textContent = "Budapest";
 }

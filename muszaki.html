@@ -87,13 +87,17 @@ footer summary{cursor:pointer;color:var(--ink2)}
 .card[data-src]::after{content:"Forrás: " attr(data-src);display:block;margin-top:14px;padding-top:8px;border-top:1px solid var(--grid);color:var(--muted);font-size:12px;line-height:1.4}
 html{scroll-behavior:smooth}
 .card{scroll-margin-top:12px}
-.ctl{padding:12px 14px}
+.tbl{overflow-x:auto;max-width:100%}
+.ctl{padding:8px 12px}
 .ctl .ctlrow{display:flex;align-items:flex-start;gap:10px;margin:0 0 6px}
 .ctl .ctlk{flex:0 0 74px;padding-top:7px;color:var(--ink2);font-size:13px;font-weight:650}
 .ctl .chips{margin:0;gap:6px}
 .ctl .chip{padding:5px 10px;font-size:13px}
+.zsel{font:inherit;font-size:13px;padding:5px 10px;border:1px solid var(--grid);border-radius:999px;background:var(--surface);color:var(--ink);max-width:100%}
+.zsel[data-on]{border-color:var(--ink2);font-weight:650}
 .ctl .note{margin:4px 0 0}
-@media (min-width:760px){.ctl{position:sticky;top:8px;z-index:20;box-shadow:0 6px 22px rgba(0,0,0,.10)}}
+@media (min-width:760px){.ctl{display:flex;flex-wrap:wrap;gap:4px 22px;align-items:center}.ctl .ctlrow{margin:0;align-items:center}.ctl .ctlk{flex:none;padding-top:0}}
+@media (min-width:760px) and (min-height:640px){.ctl{position:sticky;top:6px;z-index:20;box-shadow:0 6px 22px rgba(0,0,0,.10)}}
 @media (max-width:640px){.ctl .ctlrow{flex-direction:column;gap:2px}.ctl .ctlk{padding-top:0;flex:none}}
 .zn{color:var(--ink2);font-weight:500}
 nav.jump{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
@@ -146,11 +150,11 @@ text{font-family:inherit}
 
   <section class="card" id="fq_cEvents" data-src="Energy-Charts (Fraunhofer ISE), CC BY 4.0, energy-charts.info; saját számítás"></section>
 
+  <p class="note" id="ctlNote" style="margin:14px 2px 6px"></p>
   <section class="card ctl" id="ctl" aria-label="Ország és időablak">
     <div class="ctlrow"><span class="ctlk">Ország</span><div class="chips" id="zoneChips" role="group" aria-label="Ország"></div></div>
     <div class="ctlrow"><span class="ctlk">Időablak</span><div class="chips" id="winChips" role="group" aria-label="Időablak"></div></div>
     <div class="ctlrow" id="zoomRow" style="display:none"><span class="ctlk">Nagyítás</span><div class="chips"><span id="zoomTxt" style="align-self:center;font-size:13.5px"></span><button class="chip" type="button" id="zoomReset">Vissza az időablakra</button></div></div>
-    <p class="note" id="ctlNote"></p>
   </section>
 
   <section class="card" id="snap" data-src="ENTSO-E Transparency Platform – fogyasztás (6.1.A), termelés típusonként (16.1.B&C), határkeresztező áramlás (12.1.G)"></section>
@@ -267,6 +271,7 @@ text{font-family:inherit}
   </section>
 
   <footer id="foot"></footer>
+  <p class="note" style="text-align:center;margin:6px 0 24px" id="ver">Oldalverzió: 2026-11-24 / 3</p>
 </main>
 
 <script>
@@ -419,7 +424,17 @@ function controls(){
     const b = document.createElement("button"); b.className = "chip"; b.type = "button";
     b.setAttribute("aria-pressed", on ? "true" : "false"); b.textContent = label; b.onclick = fn; box.appendChild(b);
   };
-  zl.list.forEach(z => mk(zb, zl.names[z] || z, z === SEL.zone, () => { SEL.zone = z; flowSel = "ALL"; refresh(); }));
+  const pick = (z) => { SEL.zone = z; flowSel = "ALL"; refresh(); };
+  const near = zl.list.filter(z => OWN_FIRST.indexOf(z) >= 0), far = zl.list.filter(z => OWN_FIRST.indexOf(z) < 0);
+  near.forEach(z => mk(zb, zl.names[z] || z, z === SEL.zone, () => pick(z)));
+  if (far.length){
+    const sel = document.createElement("select"); sel.className = "zsel"; sel.setAttribute("aria-label", "További országok és zónák");
+    const o0 = document.createElement("option"); o0.value = ""; o0.textContent = "További országok és zónák (" + far.length + ")…"; sel.appendChild(o0);
+    far.forEach(z => { const o = document.createElement("option"); o.value = z; o.textContent = zl.names[z] || z; sel.appendChild(o); });
+    if (far.indexOf(SEL.zone) >= 0){ sel.value = SEL.zone; sel.setAttribute("data-on", "1"); }
+    sel.onchange = () => { if (sel.value) pick(sel.value); };
+    zb.appendChild(sel);
+  }
   WINS.forEach(([w, name]) => mk(wb, name, w === SEL.win && !SEL.zoom, () => { SEL.win = w; SEL.zoom = null; refresh(); }));
   const zr = $("zoomRow"); zr.style.display = SEL.zoom ? "" : "none";
   if (SEL.zoom){ const a = new Date(SEL.zoom[0]), b = new Date(SEL.zoom[1] + 3600e3); $("zoomTxt").textContent = fDate.format(a) + " " + fTime.format(a) + " – " + fDate.format(b) + " " + fTime.format(b); }
