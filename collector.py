@@ -43,11 +43,24 @@ NEIGHBOURS = {
 PRICE_ZONES = [HOME] + list(NEIGHBOURS)
 # Az európai pillanatkép és a hosszú távú összehasonlítás zónái. Ha egy zónára nincs day-ahead ár
 # (pl. Szerbia), egyszerűen kimarad.
-EUROPE_ZONES = {
+EUROPE_CORE = {
     "HU": "Magyarország", "AT": "Ausztria", "SK": "Szlovákia", "RO": "Románia", "HR": "Horvátország",
     "SI": "Szlovénia", "RS": "Szerbia", "CZ": "Csehország", "DE_LU": "Németország–Luxemburg",
     "PL": "Lengyelország", "BG": "Bulgária", "IT_NORD": "Észak-Olaszország", "FR": "Franciaország",
     "CH": "Svájc", "NL": "Hollandia", "BE": "Belgium", "ES": "Spanyolország", "GR": "Görögország", "PT": "Portugália",
+}
+# További ENTSO-E tagországok (a térkép teljes lefedéséhez). Ahol nincs közölt adat, a térképen szürke marad.
+EUROPE_EXTRA = {
+    "DK": "Dánia", "NO": "Norvégia", "SE": "Svédország", "FI": "Finnország", "EE": "Észtország", "LV": "Lettország",
+    "LT": "Litvánia", "IE": "Írország", "BA": "Bosznia-Hercegovina", "ME": "Montenegró", "MK": "Észak-Macedónia",
+    "AL": "Albánia", "XK": "Koszovó", "MD": "Moldova", "UA": "Ukrajna", "TR": "Törökország", "MT": "Málta",
+    "CY": "Ciprus", "GE": "Grúzia",
+}
+EUROPE_ZONES = {**EUROPE_CORE, **EUROPE_EXTRA}
+# Több ajánlati zónás országok: országszinten vonjuk össze (ár: átlag, fogyasztás/termelés/pozíció: összeg).
+ZONE_GROUPS = {
+    "DK": ["DK_1", "DK_2"], "NO": ["NO_1", "NO_2", "NO_3", "NO_4", "NO_5"], "SE": ["SE_1", "SE_2", "SE_3", "SE_4"],
+    "IE": ["IE_SEM"],
 }
 # Határonkénti nap előtti NTC csak a nem-Core határokon van (a Core-határokon flow-based kapacitás-kiosztás van,
 # ott nincs NTC, a lekérdezés felesleges és lassú). A magyar Core-határok: AT, SK, RO, HR, SI.
@@ -73,6 +86,56 @@ def with_retry(fn, tries=3, wait=4):
 
 
 NO_DATA = ("NoMatchingDataError", "InvalidBusinessParameterError", "InvalidPSRTypeError")
+
+
+class GroupClient:
+    """Becsomagolja az entsoe-py klienst: a ZONE_GROUPS országkódokra a tagzónákat külön kéri le, és összevonja.
+    Ár és eltérési ár: átlag; fogyasztás, termelés, nettó pozíció, előrejelzések, áramlás: összeg. Ahol egy tagzónára nincs adat,
+    a többi is elég; ha egyikre sincs, ugyanaz a hiba jön, mint egyetlen zónánál."""
+
+    def __init__(self, base):
+        self._b = base
+
+    def __getattr__(self, name):
+        fn = getattr(self._b, name)
+        if not name.startswith("query_"):
+            return fn
+
+        def call(*a, **k):
+            return self._call(name, fn, a, k)
+        return call
+
+    @staticmethod
+    def _expand(code):
+        return ZONE_GROUPS.get(code, [code]) if isinstance(code, str) else [code]
+
+    def _call(self, name, fn, a, k):
+        if not a or not any(isinstance(x, str) and x in ZONE_GROUPS for x in a[:2]):
+            return fn(*a, **k)
+        if name == "query_crossborder_flows":
+            combos = [(x, y) for x in self._expand(a[0]) for y in self._expand(a[1])]
+        else:
+            combos = [(z,) for z in self._expand(a[0])]
+        parts, err = [], None
+        for combo in combos:
+            try:
+                parts.append(fn(*combo, *a[len(combo):], **k))
+            except Exception as e:     # egy tagzóna hiánya nem akadály
+                err = e
+        if not parts:
+            raise err
+        if len(parts) == 1:
+            return parts[0]
+        mean = name in ("query_day_ahead_prices", "query_imbalance_prices")
+        if isinstance(parts[0], pd.Series) and mean:
+            return pd.concat(parts, axis=1).mean(axis=1)
+        if mean:
+            return pd.concat(parts).groupby(level=0).mean()
+        out = parts[0]
+        for p in parts[1:]:
+            out = out.add(p, fill_value=0)
+        return out
+
 
 
 class Batch:
@@ -709,6 +772,12 @@ EUROPE_PAIRS = [
     ("RS", "BG"), ("BG", "GR"), ("CZ", "DE_LU"), ("CZ", "PL"), ("DE_LU", "PL"), ("DE_LU", "FR"),
     ("DE_LU", "NL"), ("DE_LU", "BE"), ("DE_LU", "CH"), ("FR", "BE"), ("ES", "PT"), ("FR", "CH"), ("FR", "ES"),
     ("FR", "IT_NORD"), ("CH", "IT_NORD"), ("NL", "BE"),
+    # Skandinávia, Balti-államok, kelet és Balkán
+    ("DK", "DE_LU"), ("DK", "SE"), ("DK", "NO"), ("DK", "NL"), ("SE", "NO"), ("SE", "FI"), ("NO", "FI"), ("NO", "NL"),
+    ("SE", "DE_LU"), ("SE", "PL"), ("SE", "LT"), ("FI", "EE"), ("EE", "LV"), ("LV", "LT"), ("LT", "PL"), ("NO", "DE_LU"),
+    ("HU", "UA"), ("SK", "UA"), ("PL", "UA"), ("RO", "UA"), ("RO", "MD"), ("UA", "MD"),
+    ("BG", "TR"), ("GR", "TR"), ("GR", "AL"), ("GR", "MK"), ("BG", "MK"), ("RS", "MK"), ("RS", "ME"), ("RS", "BA"),
+    ("HR", "BA"), ("BA", "ME"), ("ME", "AL"), ("AL", "XK"), ("RS", "XK"), ("MK", "XK"), ("ME", "XK"), ("IT_NORD", "ME"), ("IE", "FR"),
 ]
 
 
@@ -874,7 +943,7 @@ def main():
 
     # retry_delay: az alapértelmezett 60 s várakozás egy hibás kérés után percekre megállítaná a futást;
     # timeout: egy elakadt kérés ne tartson fel mindent.
-    client = EntsoePandasClient(api_key=token, retry_count=2, retry_delay=5, timeout=45)
+    client = GroupClient(EntsoePandasClient(api_key=token, retry_count=2, retry_delay=5, timeout=45))
     data = collect(client, hours=args.hours, budget_s=args.budget, workers=args.workers)
     if not any(b["last_ts"] for b in data["borders"]):
         sys.exit("Egyik határra sem érkezett áramlási adat; a data.json nem íródik felül.")

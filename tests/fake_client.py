@@ -146,7 +146,7 @@ class FakeClient:
         base = 95 + 12 * np.sin(day * 1.7)
         shape = 70 * np.exp(-((h - 19) ** 2) / 5) + 35 * np.exp(-((h - 8) ** 2) / 4) - 115 * np.exp(-((h - 13) ** 2) / 7)
         off = {"HU": 0, "AT": -7, "SK": 4, "RO": 14, "HR": 3, "SI": -2, "CZ": -6, "DE_LU": -16, "PL": 9, "BG": 13,
-               "IT_NORD": 15, "FR": -22, "CH": 5, "NL": -12, "BE": -14, "ES": -30, "GR": 16, "PT": -8}[zone]
+               "IT_NORD": 15, "FR": -22, "CH": 5, "NL": -12, "BE": -14, "ES": -30, "GR": 16, "PT": -8}.get(zone, (sum(map(ord, zone)) % 31) - 15)
         return pd.Series(base + shape + off, index=idx.tz_convert(BRU)).round(2)
 
     # ---------- menetrend és kapacitás

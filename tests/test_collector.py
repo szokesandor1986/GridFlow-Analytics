@@ -174,14 +174,15 @@ def test_parallel():
 
 def test_europe():
     """Európai ár-pillanatkép (europe.json)."""
-    eu = col.collect_europe(FakeClient(NOW), now=NOW, budget_s=60)
+    eu = col.collect_europe(col.GroupClient(FakeClient(NOW)), now=NOW, budget_s=60)
     assert "HU" in eu["zones"] and "DE_LU" in eu["zones"] and "RS" not in eu["zones"], sorted(eu["zones"])
     assert len(eu["ts"]) >= 24 * 3 and all(len(v) == len(eu["ts"]) for v in eu["zones"].values())
+    assert {"SE", "NO", "DK", "FI", "PL"} <= set(eu["zones"]) and "UA" not in eu["zones"], sorted(eu["zones"])
     json.dumps(eu, allow_nan=False)
     fl = eu["flows"]
     assert len(eu["flow_ts"]) == 48 and all(len(f["mw"]) == 48 for f in fl)
     got = {(f["a"], f["b"]) for f in fl}
-    assert ("HU", "AT") in got and ("DE_LU", "FR") in got, sorted(got)
+    assert ("HU", "AT") in got and ("DE_LU", "FR") in got and ("DK", "SE") in got, sorted(got)
     ha = next(f for f in fl if (f["a"], f["b"]) == ("HU", "AT"))
     assert any(v is not None for v in ha["mw"]) and all(v is None or abs(v) < 1e5 for v in ha["mw"])
     print(f"6. európai ár-pillanatkép rendben ({len(eu['zones'])} zóna)")
@@ -189,7 +190,7 @@ def test_europe():
 
 def test_countries():
     """Országválasztó adatai (countries.json): minden zónára fogyasztás, termelés, nettó import; az előjel-ellenőrzés."""
-    cn = col.collect_countries(FakeClient(NOW), now=NOW, hours=168, budget_s=60)
+    cn = col.collect_countries(col.GroupClient(FakeClient(NOW)), now=NOW, hours=168, budget_s=60)
     assert "DE_LU" in cn["zones"] and "HU" not in cn["zones"], sorted(cn["zones"])
     n = len(cn["hourly_ts"])
     assert n >= 168 + 24, n
@@ -197,6 +198,11 @@ def test_countries():
     assert len(z["load"]["actual"]) == n and len(z["net_import_mw"]) == n
     assert set(z["generation"]) >= {"nuclear", "gas", "solar"}
     assert cn["netpos_flipped"] == [], cn["netpos_flipped"]       # a helyes konvenciót nem fordítja meg
+    se, fc = cn["zones"]["SE"], FakeClient(NOW)
+    st, en = pd.Timestamp("2026-11-20", tz="UTC"), pd.Timestamp("2026-11-21", tz="UTC")
+    one = sum(float(fc.query_load(z, start=st, end=en).iloc[:, 0].sum()) for z in col.ZONE_GROUPS["SE"])
+    got = float(col.GroupClient(fc).query_load("SE", start=st, end=en).iloc[:, 0].sum())
+    assert abs(one - got) < 1e-6 * one, (one, got)         # az országösszeg a tagzónák összege
     json.dumps(cn, allow_nan=False)
     # fordított előjelű forrás: a gyűjtő észreveszi és megfordítja
     bad = FakeClient(NOW)

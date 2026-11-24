@@ -1485,5 +1485,70 @@ function eventsSection(){
 
 load();
 </script>
+<script>
+// ---------- grafikonok és térképek mentése képként (PNG). Csak egérrel fölé víve (érintőképernyőn halványan) látszik.
+(function(){
+  const NS = "http://www.w3.org/2000/svg", rs = getComputedStyle(document.documentElement);
+  const vars = (s) => s.replace(/var\((--[\w-]+)\)/g, (m, n) => rs.getPropertyValue(n).trim() || m);
+  const esc = (s) => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  function legendItems(card){
+    const out = [];
+    card.querySelectorAll(".legend > *").forEach(it => {
+      const txt = it.textContent.trim().replace(/\s+/g, " "); if (!txt) return;
+      let col = null; const sw = it.querySelector("i,rect,line,path,polygon");
+      if (sw){ const cs = getComputedStyle(sw), tg = sw.tagName.toLowerCase(), ok = (c) => c && /^(rgb|#)/.test(c) && c !== "rgba(0, 0, 0, 0)"; col = tg === "i" ? cs.backgroundColor : tg === "line" ? cs.stroke : (ok(cs.fill) ? cs.fill : (ok(cs.stroke) ? cs.stroke : null)); }
+      out.push({txt, col});
+    });
+    return out;
+  }
+  async function save(host){
+    const svg = host.querySelector("svg:not(.xbi)"); if (!svg) return;
+    const card = host.closest(".card") || document.body, vb = svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width ? svg.viewBox.baseVal : null;
+    const W0 = vb ? vb.width : svg.getBoundingClientRect().width, H0 = vb ? vb.height : svg.getBoundingClientRect().height;
+    const bodyCs = getComputedStyle(document.body), ff = bodyCs.fontFamily, surf = rs.getPropertyValue("--surface").trim() || "#fff", ink = rs.getPropertyValue("--ink").trim() || "#000", ink2 = rs.getPropertyValue("--ink2").trim() || "#555";
+    const OUT_W = Math.max(640, Math.round(W0)), sc = OUT_W / W0, ch = H0 * sc;
+    const h2 = card.querySelector("h2"), h3 = (() => { let e = host.previousElementSibling; while (e){ if (/^H3$/.test(e.tagName)) return e; e = e.previousElementSibling; } return null; })();
+    const title = (h2 ? h2.textContent.replace(/\s+/g, " ").trim() : document.title) + (h3 ? " – " + h3.textContent.trim() : "");
+    const src = (card.getAttribute("data-src") || "").trim(), leg = legendItems(card);
+    // jelmagyarázat sorokba tördelve
+    let lx = 16, ly = 0, rows = 1; const items = [];
+    leg.forEach(l => { const w = 22 + l.txt.length * 6.6 + 14; if (lx + w > OUT_W - 16 && lx > 16){ lx = 16; rows++; } items.push({...l, x:lx, row:rows - 1}); lx += w; });
+    const headH = 44, legH = leg.length ? rows * 20 + 8 : 0, footH = src ? 40 : 14, H = headH + ch + legH + footH;
+    const clone = svg.cloneNode(true); clone.removeAttribute("style"); clone.setAttribute("width", OUT_W); clone.setAttribute("height", ch); clone.setAttribute("x", 0); clone.setAttribute("y", headH);
+    if (!clone.getAttribute("viewBox")) clone.setAttribute("viewBox", "0 0 " + W0 + " " + H0);
+    clone.querySelectorAll(".mz").forEach(e => e.remove());
+    let s = '<svg xmlns="' + NS + '" width="' + OUT_W + '" height="' + H + '" viewBox="0 0 ' + OUT_W + ' ' + H + '" font-family="' + esc(ff.replace(/"/g, "'")) + '"><rect width="100%" height="100%" fill="' + esc(surf) + '"/>' +
+      '<text x="16" y="28" font-size="17" font-weight="700" fill="' + esc(ink) + '">' + esc(title) + '</text>' + new XMLSerializer().serializeToString(clone);
+    items.forEach(l => { const y = headH + ch + 8 + l.row * 20; if (l.col) s += '<rect x="' + l.x + '" y="' + (y + 2) + '" width="12" height="12" rx="3" fill="' + esc(l.col) + '"/>'; s += '<text x="' + (l.x + (l.col ? 18 : 0)) + '" y="' + (y + 13) + '" font-size="12.5" fill="' + esc(ink2) + '">' + esc(l.txt) + '</text>'; });
+    if (src){ const t = "Forrás: " + src, fy = H - 22; const mid = t.length > 120 ? t.lastIndexOf(" ", 120) : -1; s += '<text x="16" y="' + fy + '" font-size="11.5" fill="' + esc(ink2) + '">' + esc(mid > 0 ? t.slice(0, mid) : t) + '</text>' + (mid > 0 ? '<text x="16" y="' + (fy + 14) + '" font-size="11.5" fill="' + esc(ink2) + '">' + esc(t.slice(mid + 1)) + '</text>' : ""); }
+    s += '<text x="' + (OUT_W - 16) + '" y="' + (H - 6) + '" text-anchor="end" font-size="10.5" fill="' + esc(ink2) + '" opacity=".7">GridFlow Analytics</text></svg>';
+    s = vars(s);
+    const img = new Image(); img.decoding = "sync";
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(s); }).catch(() => null);
+    const cv = document.createElement("canvas"), k = 2; cv.width = OUT_W * k; cv.height = H * k; const g = cv.getContext("2d"); g.scale(k, k); g.fillStyle = surf; g.fillRect(0, 0, OUT_W, H);
+    try{ g.drawImage(img, 0, 0, OUT_W, H); }catch(e){ return; }
+    const name = (title.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "grafikon") + ".png";
+    cv.toBlob(b => { if (!b) return; const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500); }, "image/png");
+  }
+  function attach(host){
+    if (host.querySelector(":scope > .xb")) return;
+    if (!host.querySelector("svg")) return;
+    if (getComputedStyle(host).position === "static") host.style.position = "relative";
+    const b = document.createElement("button"); b.type = "button"; b.className = "xb"; b.title = "Mentés képként (PNG)"; b.setAttribute("aria-label", "Mentés képként (PNG)");
+    b.innerHTML = '<svg class="xbi" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 1.5v8M3.6 6.3 7 9.7l3.4-3.4M2 12h10"/></svg>';
+    b.addEventListener("click", ev => { ev.stopPropagation(); save(host); });
+    host.appendChild(b);
+  }
+  function scan(){ document.querySelectorAll(".chart, .mapwrap").forEach(attach); }
+  const st = document.createElement("style");
+  st.textContent = ".xb{position:absolute;top:4px;right:4px;z-index:4;width:28px;height:28px;border:1px solid var(--grid);background:var(--surface);color:var(--ink2);border-radius:8px;padding:0;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity .15s}" +
+    ".chart:hover>.xb,.mapwrap:hover>.xb,.xb:focus-visible{opacity:.92}@media (hover:none){.xb{opacity:.5;width:26px;height:26px}}.xb:hover{color:var(--ink)}" +
+    ".mz{position:absolute;top:8px;left:8px;display:flex;gap:4px;z-index:3}.mz button{width:30px;height:30px;border:1px solid var(--grid);background:var(--surface);color:var(--ink);border-radius:8px;font-size:17px;line-height:1;cursor:pointer;opacity:.9;padding:0}.mz button:hover{opacity:1}";
+  document.head.appendChild(st);
+  let t = 0; new MutationObserver(() => { clearTimeout(t); t = setTimeout(scan, 120); }).observe(document.body, {childList:true, subtree:true});
+  scan();
+})();
+</script>
+
 </body>
 </html>

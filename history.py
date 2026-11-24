@@ -34,7 +34,7 @@ from collector import HOME, NEIGHBOURS, Batch, flatten_types, hourly_mean
 
 BUD = "Europe/Budapest"
 # A magyar ár összehasonlítása: a collector.EUROPE_ZONES zónái (ha egy zónára nincs adat, kimarad).
-ZONES = list(col.EUROPE_ZONES)
+ZONES = list(col.EUROPE_CORE)
 LDC_Q = list(range(100, -1, -5))        # terhelési tartamgörbe: 100%, 95% ... 0% kvantilis (csúcstól a minimumig)
 SCHEMA = 1
 
@@ -232,7 +232,7 @@ def snapshot(hist, now, errors, missing=()):
     out["source"] = "ENTSO-E Transparency Platform"
     out["demo"] = False
     out["zones"] = ZONES
-    out["names"] = col.EUROPE_ZONES
+    out["names"] = col.EUROPE_CORE
     out["errors"] = list(errors)
     out["missing"] = list(missing)
     out["co2"] = {"factors": col.CO2_FACTORS, "source": col.CO2_SOURCE}
