@@ -557,7 +557,7 @@ function geoSetup(host, key, draw){
   return S;
 }
 // m = "c": országos nézet (áramlási térkép), m = "s": ajánlati zónák (NO1–5, SE1–4, DK1–2, olasz zónák külön)
-const SPLIT = ["NO", "SE", "DK", "IT"];
+const SPLIT = ["NO", "SE", "DK", "IT"], GEOONLY = ["RU", "AM", "AZ"];
 const FALLBACK_NAMES = {RU:"Oroszország", AM:"Örményország", AZ:"Azerbajdzsán", GB:"Egyesült Királyság", BY:"Belarusz", IS:"Izland"};
 const zoneList = (m) => m === "s" ? Object.keys(GEO.zones).filter(z => !SPLIT.includes(z)).concat(Object.keys(GEO.sub || {})) : Object.keys(GEO.zones).map(z => z === "IT" ? "IT_NORD" : z);
 const zPath = (z, m) => m === "s" ? ((GEO.sub && GEO.sub[z]) || GEO.zones[z]) : (z === "IT_NORD" ? GEO.zones.IT : GEO.zones[z]);
@@ -579,7 +579,7 @@ function geoZoneMap(host, M, cur, vals, color, info, nm){
     zl.forEach(z => {
       const v = vals[z], pinned = z === mapPin;
       const g = el("g", {tabindex:0, role:"img", "aria-label":nm(z) + ": " + (has(v) ? cur.f(v) + " " + cur.u : "nincs adat")}, C); g.style.cursor = "pointer"; g.style.outline = "none";
-      const gc = geoCols(), at = {d:zPath(z, "s"), fill:has(v) ? rgbStr(color(v)) : "url(#hatchND)", stroke:pinned || z === "HU" ? ink : gc.line, "stroke-width":(pinned || z === "HU" ? 2.2 : .8) * k, "stroke-linejoin":"round"};
+      const gc = geoCols(), at = {d:zPath(z, "s"), fill:has(v) ? rgbStr(color(v)) : (GEOONLY.includes(z) ? gc.land : "url(#hatchND)"), stroke:pinned || z === "HU" ? ink : gc.line, "stroke-width":(pinned || z === "HU" ? 2.2 : .8) * k, "stroke-linejoin":"round"};
       el("path", at, g);
       const mv = (ev) => S.showTip(ev, info(z));
       g.addEventListener("pointermove", mv); g.addEventListener("pointerenter", mv); g.addEventListener("pointerleave", S.hideTip);
@@ -756,7 +756,7 @@ function fmapSection(){
     geoBase(C, k, "itN2");
     zoneList("c").forEach(z => {
       const c = col(z), g = el("g", {}, C); g.style.cursor = "pointer";
-      const gc = geoCols(), at = {d:zPath(z, "c"), fill:c ? rgbStr(c) : "url(#hatchND)", stroke:z === focus ? ink : gc.line, "stroke-width":(z === focus ? 2.4 : .8) * k, "stroke-linejoin":"round"};
+      const gc = geoCols(), at = {d:zPath(z, "c"), fill:c ? rgbStr(c) : (GEOONLY.includes(z) ? gc.land : "url(#hatchND)"), stroke:z === focus ? ink : gc.line, "stroke-width":(z === focus ? 2.4 : .8) * k, "stroke-linejoin":"round"};
       el("path", at, g);
       g.addEventListener("pointermove", ev => S.showTip(ev, zinfo(z))); g.addEventListener("pointerleave", S.hideTip);
       g.addEventListener("click", () => { if (S.st.dragged) return; fmFocus = (fmFocus === z || z === "HU") ? null : z; fmapSection(); });
@@ -1136,10 +1136,10 @@ function yearSection(){
     let pS = 0, pC = 0; xs.forEach(x => { const p = x.r.price; if (p && p.avg != null){ pS += p.avg * p.n; pC += p.n; } });
     const neg = sm(r => r.price ? r.price.neg_h : null), load = sm(r => r.load_gwh), imp = sm(r => r.imp_gwh);
     const peaks = xs.map(x => x.r.load_peak).filter(has);
-    html += '<tr><td class="nm">' + y + (complete ? "" : " (eddig)") + '</td><td class="r num">' + (pC ? nf1.format(pS / pC) : "–") + '</td><td class="r num">' + (neg == null ? "–" : nf0.format(neg)) + '</td><td class="r num">' + sh("solar") + '</td><td class="r num hide-sm">' + sh("gas") + '</td><td class="r num hide-sm">' + sh("nuclear") + '</td><td class="r num hide-sm">' +
+    html += '<tr><td class="nm">' + y + (complete ? "" : " (eddig)") + '</td><td class="r num">' + (pC ? nf1.format(pS / pC) : "–") + '</td><td class="r num">' + (neg == null ? "–" : nf0.format(neg)) + '</td><td class="r num">' + sh("solar") + (y <= 2021 ? "*" : "") + '</td><td class="r num hide-sm">' + sh("gas") + '</td><td class="r num hide-sm">' + sh("nuclear") + '</td><td class="r num hide-sm">' +
       (complete && load != null ? nf1.format(load / 1000) : "–") + '</td><td class="r num hide-sm">' + (peaks.length ? nf0.format(Math.max(...peaks)) : "–") + '</td><td class="r num">' + (load && imp != null ? nf1.format(imp / load * 100) : "–") + '</td></tr>';
   });
-  host.innerHTML = html + "</tbody></table></div>";
+  host.innerHTML = html + '</tbody></table></div><p class="note">A termelési részarányok az ENTSO-E-nek jelentett termelésből számolt arányok (az összes jelentett termelés százalékában). A magyar napelemes termelésnek csak a jelentett erőművek szerepelnek az ENTSO-E-n: a háztartási méretű kiserőművek és a kisebb parkok hiányoznak, ezért a Nap, % a valóságosnál kisebb. *2019–2021-ben a jelentés még különösen hiányos volt (a hazai napelemes kapacitás ekkor már több mint egy gigawatt volt), ezért ezeknél az éveknél a részarány nem összehasonlítható a későbbiekkel, és a növekedés egy része a jelentés bővüléséből ered, nem csak a telepített kapacitásból.</p>';
 }
 
 // ---------------------------------------------------------------- lábjegyzet

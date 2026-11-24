@@ -253,6 +253,18 @@ def test_balancing_and_finance():
     print("8. aFRR/mFRR (12.3.E), aktivált energia ára és 17.1.I pénzügyi mérleg rendben")
 
 
+def test_financial_two_prices_in_point():
+    """Egy Point két Financial_Price-t tartalmaz (A01 kiadás, A02 bevétel): mindkettőnek meg kell maradnia."""
+    xml = (b"<Balancing_MarketDocument><TimeSeries><mRID>1</mRID><currency_Unit.name>HUF</currency_Unit.name><Period>"
+           b"<timeInterval><start>2024-11-30T23:00Z</start><end>2024-12-31T23:00Z</end></timeInterval><resolution>P1M</resolution>"
+           b"<Point><position>1</position><Financial_Price><amount>5000</amount><direction>A01</direction></Financial_Price>"
+           b"<Financial_Price><amount>4400</amount><direction>A02</direction></Financial_Price></Point></Period></TimeSeries></Balancing_MarketDocument>")
+    rows, _ = col.parse_financial_balance(xml)
+    fs = col.finance_summary((rows, _))
+    assert fs["up"] == [5000.0] and fs["down"] == [4400.0], fs
+    print("9. 17.1.I: kiadás és bevétel is megmarad")
+
+
 if __name__ == "__main__":
     # a with_retry várakozását kikapcsoljuk, hogy a hibatesztek ne lassúak legyenek
     col.time.sleep = lambda s: None
@@ -262,6 +274,7 @@ if __name__ == "__main__":
     test_budget()
     test_parallel()
     test_europe()
+    test_financial_two_prices_in_point()
     test_countries()
     test_balancing_and_finance()
     print("MINDEN TESZT ÁTMENT")

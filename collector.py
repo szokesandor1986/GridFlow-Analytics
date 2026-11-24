@@ -474,20 +474,25 @@ def parse_financial_balance(content):
                     start = start.tz_localize("UTC")
                 for pt in period.find_all("point"):
                     pl = leaf(pt)
-                    amount = next((v for k, v in pl.items() if k.endswith("amount") or k == "quantity"), None)
-                    d = next((v for k, v in pl.items() if k.endswith("direction")), ts_dir)
                     pos = int(pl.get("position", "1").replace(",", "") or 1)
-                    if sample is None:
-                        sample = {"timeseries": sorted(tl), "point": sorted(pl), "resolution": res, "value_example": pl}
-                    if amount is None:
-                        continue
-                    try:
-                        val = float(amount.replace(",", ""))
-                    except ValueError:
-                        continue
                     t0 = start + pd.DateOffset(months=pos - 1) if res.upper() == "P1M" else start
-                    rows.append({"month": t0.tz_convert("Europe/Budapest").strftime("%Y-%m"), "dir": FIN_DIR.get(d, str(d)),
-                                 "amount": val, "currency": cur})
+                    month = t0.tz_convert("Europe/Budapest").strftime("%Y-%m")
+                    # Egy ponton belül több Financial_Price van (A01 = kiadás, A02 = bevétel): mindegyiket külön olvassuk,
+                    # különben a szótár az utolsót tartaná meg, és a kiadás elveszne.
+                    fps = pt.find_all("financial_price")
+                    items = [leaf(fp) for fp in fps] if fps else [pl]
+                    if sample is None:
+                        sample = {"timeseries": sorted(tl), "point": sorted(pl), "resolution": res, "value_example": pl, "financial_prices_in_point": len(fps)}
+                    for it in items:
+                        amount = next((v for k, v in it.items() if k.endswith("amount") or k == "quantity"), None)
+                        d = next((v for k, v in it.items() if k.endswith("direction")), ts_dir)
+                        if amount is None:
+                            continue
+                        try:
+                            val = float(amount.replace(",", ""))
+                        except ValueError:
+                            continue
+                        rows.append({"month": month, "dir": FIN_DIR.get(d, str(d)), "amount": val, "currency": cur})
     return rows, sample
 
 
