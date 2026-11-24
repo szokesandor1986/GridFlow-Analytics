@@ -197,21 +197,33 @@ def test_countries():
     z = cn["zones"]["AT"]
     assert len(z["load"]["actual"]) == n and len(z["net_import_mw"]) == n
     assert set(z["generation"]) >= {"nuclear", "gas", "solar"}
-    assert cn["netpos_flipped"] == [], cn["netpos_flipped"]       # a helyes konvenciót nem fordítja meg
+    assert "netpos_flipped" not in cn           # a day-ahead nettó pozíciót (előjel nélkül) már nem használjuk
     se, fc = cn["zones"]["SE"], FakeClient(NOW)
     st, en = pd.Timestamp("2026-11-20", tz="UTC"), pd.Timestamp("2026-11-21", tz="UTC")
     one = sum(float(fc.query_load(z, start=st, end=en).iloc[:, 0].sum()) for z in col.ZONE_GROUPS["SE"])
     got = float(col.GroupClient(fc).query_load("SE", start=st, end=en).iloc[:, 0].sum())
     assert abs(one - got) < 1e-6 * one, (one, got)         # az országösszeg a tagzónák összege
     json.dumps(cn, allow_nan=False)
-    # fordított előjelű forrás: a gyűjtő észreveszi és megfordítja
-    bad = FakeClient(NOW)
-    bad.netpos_export_positive = False
-    cn2 = col.collect_countries(bad, now=NOW, hours=168, budget_s=60, zones=["AT", "SK"])
-    assert sorted(cn2["netpos_flipped"]) == ["AT", "SK"], cn2["netpos_flipped"]
-    a, b = cn["zones"]["AT"]["net_import_mw"], cn2["zones"]["AT"]["net_import_mw"]
-    assert all(abs(x - y) < 1e-6 for x, y in zip(a, b) if x is not None and y is not None)
-    print(f"7. országadatok rendben ({len(cn['zones'])} zóna, {n} óra, előjel-ellenőrzés működik)")
+    # a nettó import a fizikai határáramlásokból jön: AT = (bejövő - kimenő) az összes szomszédjával
+    fc2 = FakeClient(NOW)
+    adj = col._adjacency()
+    zn, idx = cn["zones"]["AT"], pd.DatetimeIndex(cn["hourly_ts"])
+    exp_net = None
+    for nbr in sorted(adj["AT"]):
+        for a_, b_, sg in ((nbr, "AT", 1), ("AT", nbr, -1)):
+            try:
+                sr = fc2.query_crossborder_flows(a_, b_, start=idx[0], end=idx[-1] + pd.Timedelta(hours=1))
+            except Exception:  # noqa: BLE001
+                continue
+            h = col.hourly_mean(sr).reindex(idx) * sg
+            exp_net = h if exp_net is None else exp_net.add(h, fill_value=0)
+    assert exp_net is not None and zn["net_borders"][0] >= 1
+    got_net = pd.Series(zn["net_import_mw"], index=idx, dtype="float64")
+    both = pd.concat([got_net, exp_net], axis=1).dropna().iloc[:120]      # a jól lefedett (nem a legfrissebb, részleges) órák
+    assert len(both) > 50 and (both.iloc[:, 0] - both.iloc[:, 1]).abs().max() < 0.05, "a nettó import nem egyezik a határáramlások különbségével"
+    # országcsoport (SE): a tagzónák közötti belső áramlás nem számít bele
+    assert "net_import_mw" in cn["zones"].get("DK", {}) or "DK" not in cn["zones"]
+    print(f"7. országadatok rendben ({len(cn['zones'])} zóna, {n} óra, nettó import fizikai áramlásból)")
 
 
 def test_balancing_and_finance():
