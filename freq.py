@@ -170,7 +170,7 @@ def fetch_day(http, day, throttle, errors):
     return None
 
 
-def collect(http, existing=None, today=None, throttle=None, max_fetch=6, keep_days=60):
+def collect(http, existing=None, today=None, throttle=None, max_fetch=6, keep_days=400):
     today = today or datetime.now(timezone.utc).date()
     throttle = throttle or Throttle()
     errors, notes = [], []

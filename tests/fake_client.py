@@ -76,6 +76,14 @@ def load_target(idx):
     return 4500 + 1100 * np.exp(-((h - 8) ** 2) / 6) + 800 * np.exp(-((h - 12.5) ** 2) / 14) + 2100 * np.exp(-((h - 19) ** 2) / 7)
 
 
+ZONE_SCALE = {"AT": 1.1, "SK": 0.7, "RO": 1.3, "HR": 0.5, "SI": 0.3, "RS": 0.9, "CZ": 1.4, "DE_LU": 11.0, "PL": 3.2,
+              "BG": 0.8, "IT_NORD": 5.0, "FR": 9.0, "CH": 1.2, "NL": 2.5, "BE": 1.8, "ES": 4.5, "GR": 0.9}
+
+
+def zscale(zone):
+    return ZONE_SCALE.get(zone, 1.0)
+
+
 class FakeClient:
     def __init__(self, now):
         self.now = now
@@ -157,16 +165,24 @@ class FakeClient:
         base = 450 if b == "HU" else 520
         return self._ser(lambda idx: base + 40 * np.sin(secs(idx) / 40000.0), start, end, "h")
 
+    def query_net_position(self, zone, start, end, dayahead=True, **kw):
+        """Az entsoe-py konvenciója: pozitív = nettó export (a fake modellben a nettó import ellentettje)."""
+        idx = pd.date_range(start, end, freq="h", tz="UTC", inclusive="left")
+        if len(idx) == 0:
+            raise NoMatchingDataError
+        sign = -1.0 if getattr(self, "netpos_export_positive", True) else 1.0
+        return pd.Series(sign * self._gen(idx)["net"] * zscale(zone), index=idx.tz_convert(BRU))
+
     # ---------- fogyasztás, termelés, előrejelzések
     def query_load(self, zone, start, end, **kw):
         s = self._ser(lambda idx: self._gen(idx)["load"], start, min(end, self._pub_end("15min")), "15min")
-        return s.to_frame("Actual Load")
+        return (s * zscale(zone)).to_frame("Actual Load")
 
     def query_load_forecast(self, zone, start, end, **kw):
         def f(idx):
             t = secs(idx)
             return load_target(idx) + 170 * np.sin(t / 9000.0) + 60 * np.sin(t / 1300.0)
-        return self._ser(f, start, end, "h").to_frame("Forecasted Load")
+        return (self._ser(f, start, end, "h") * zscale(zone)).to_frame("Forecasted Load")
 
     def query_generation(self, zone, start, end, nett=False, **kw):
         last = self._pub_end("15min")
@@ -176,14 +192,14 @@ class FakeClient:
         cols = {"Nuclear": sum(g["nuc"].values()), "Fossil Gas": g["gas"], "Fossil Brown coal/Lignite": o["coal"],
                 "Solar": o["solar"], "Wind Onshore": o["wind"], "Biomass": o["bio"] * 0.8, "Waste": o["bio"] * 0.2,
                 "Hydro Run-of-river and poundage": o["hydro"], "Other": o["other"]}
-        return pd.DataFrame(cols, index=idx.tz_convert(BUD)).clip(lower=0)
+        return pd.DataFrame(cols, index=idx.tz_convert(BUD)).clip(lower=0) * zscale(zone)
 
     def query_wind_and_solar_forecast(self, zone, start, end, **kw):
         idx = pd.date_range(start, end, freq="h", tz="UTC", inclusive="left")
         o = others(idx)
         t = secs(idx)
         return pd.DataFrame({"Solar": o["solar"] * (1.0 + 0.18 * np.sin(t / 7000.0) + 0.05),
-                             "Wind Onshore": o["wind"] * (1.0 + 0.3 * np.sin(t / 5000.0))}, index=idx.tz_convert(BUD)).clip(lower=0)
+                             "Wind Onshore": o["wind"] * (1.0 + 0.3 * np.sin(t / 5000.0))}, index=idx.tz_convert(BUD)).clip(lower=0) * zscale(zone)
 
     def query_installed_generation_capacity(self, zone, start, end, **kw):
         cols = {"Nuclear": 2000, "Fossil Gas": 2900, "Fossil Brown coal/Lignite": 700, "Solar": 8500,
@@ -260,7 +276,37 @@ class FakeClient:
         t = secs(idx)
         return pd.DataFrame({"Imbalance Volume": 60 * np.sin(t / 4500.0) + 25 * np.sin(t / 700.0)}, index=idx.tz_convert(BUD))
 
+    def query_aggregated_bids(self, zone, process_type, start, end, **kw):
+        """12.3.E: (irány, mrid, 'Offered'|'Activated'); két termékidősor irányonként, mint az éles közlésben."""
+        idx = pd.date_range(start, min(end, self._pub_end("15min")), freq="15min", tz="UTC")
+        t = secs(idx)
+        k = 1.0 if process_type == "A51" else 0.6
+        up = np.maximum(0, np.sin(t / 5200.0)) * 70 * k + 8 * k
+        dn = np.maximum(0, -np.sin(t / 5200.0)) * 60 * k + 6 * k
+        cols = {("Up", 1, "Offered"): 400 * k + 0 * up, ("Up", 1, "Activated"): up * 0.8, ("Up", 2, "Offered"): 80 * k + 0 * up, ("Up", 2, "Activated"): up * 0.2,
+                ("Down", 3, "Offered"): 380 * k + 0 * dn, ("Down", 3, "Activated"): dn}
+        df = pd.DataFrame(cols, index=idx.tz_convert(BUD))
+        df.columns = pd.MultiIndex.from_tuples(df.columns, names=("direction", "mrid", "unit"))
+        return df
+
+    def query_activated_balancing_energy_prices(self, zone, start, end, process_type="A16", business_type=None, **kw):
+        idx = pd.date_range(start, min(end, self._pub_end("15min")), freq="15min", tz="UTC")
+        t = secs(idx)
+        k = 1.0 if business_type == "A96" else 1.3
+        return pd.DataFrame({"Up": 130 * k + 40 * np.sin(t / 7000.0), "Down": 60 / k + 20 * np.sin(t / 6000.0), "ReserveType": "aFRR"}, index=idx.tz_convert(BUD))
+
+    def query_financial_balance(self, zone, start, end, **kw):
+        """17.1.I: havi, két irány (A01 = up, A02 = down), a helyi pénznemben."""
+        months = pd.period_range(pd.Timestamp(start).tz_localize(None) if pd.Timestamp(start).tzinfo else pd.Timestamp(start), pd.Timestamp(end).tz_localize(None) if pd.Timestamp(end).tzinfo else pd.Timestamp(end), freq="M")
+        rows = []
+        for i, m in enumerate(months[:-1] if len(months) > 1 else months):
+            base = 1.2e9 + 2.5e8 * np.sin(i / 3.0)
+            rows.append({"month": str(m), "dir": "up", "amount": float(round(base)), "currency": "HUF"})
+            rows.append({"month": str(m), "dir": "down", "amount": float(round(base * (0.55 + 0.25 * np.sin(i / 2.0)))), "currency": "HUF"})
+        return rows, {"timeseries": ["businesstype", "currency_unit.name", "curvetype", "mrid"], "point": ["amount", "direction", "position"], "resolution": "P1M"}
+
     def query_activated_balancing_energy(self, zone, start, end, business_type, **kw):
+        raise NoMatchingDataError              # az éles HU-adatban a régi 17.1.E közlés megszűnt
         idx = pd.date_range(start, min(end, self._pub_end("15min")), freq="15min", tz="UTC")
         t = secs(idx)
         k = 1.0 if business_type == "A96" else 0.6

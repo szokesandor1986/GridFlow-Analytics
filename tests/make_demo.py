@@ -22,12 +22,12 @@ from fake_client import FakeClient  # noqa: E402
 NOW = pd.Timestamp("2026-11-23 13:20", tz="Europe/Budapest").tz_convert("UTC")
 client = FakeClient(NOW)
 
-main = col.collect(client, now=NOW)
+main = col.collect(client, now=NOW, hours=168)
 main["demo"] = True
 main["source"] = "DEMO – szintetikus adat, nem valós mérés"
 col.write_json(str(ROOT / "demo-data.json"), main)
 
-eng = col.collect_engineer(client, now=NOW, main=main)
+eng = col.collect_engineer(client, now=NOW, hours=168, main=main)
 eng["demo"] = True
 eng["source"] = "DEMO – szintetikus adat, nem valós mérés"
 col.write_json(str(ROOT / "demo-engineer.json"), eng)
@@ -36,6 +36,24 @@ eu = col.collect_europe(client, now=NOW)
 eu["demo"] = True
 eu["source"] = "DEMO – szintetikus adat, nem valós mérés"
 col.write_json(str(ROOT / "demo-europe.json"), eu)
+
+cn = col.collect_countries(client, now=NOW, hours=168)
+# a kitalált kliens minden zónára ugyanazt a mintát adja; a demóban az erőműpark-összetételt zónánként eltoljuk,
+# hogy a CO2-összevetés és az országváltás látványa valósághűbb legyen
+TILT = {"FR": {"nuclear": 5.0, "gas": 0.3, "coal": 0.05}, "DE_LU": {"coal": 6.0, "wind": 9.0, "nuclear": 0.0, "solar": 3.0},
+        "PL": {"coal": 14.0, "nuclear": 0.0, "gas": 0.4}, "CH": {"hydro": 40.0, "nuclear": 3.0, "gas": 0.0, "coal": 0.0},
+        "AT": {"hydro": 25.0, "nuclear": 0.0, "coal": 0.0}, "SK": {"nuclear": 4.0, "coal": 0.6}, "CZ": {"coal": 5.0, "nuclear": 3.0},
+        "RO": {"hydro": 18.0, "coal": 3.0, "nuclear": 2.0, "wind": 6.0}, "ES": {"wind": 12.0, "solar": 6.0, "nuclear": 2.0, "gas": 1.2},
+        "HR": {"hydro": 10.0, "nuclear": 0.0, "coal": 0.2}, "SI": {"hydro": 8.0, "nuclear": 4.0}, "BG": {"coal": 6.0, "nuclear": 3.0},
+        "NL": {"gas": 2.2, "wind": 5.0, "nuclear": 0.0, "coal": 0.5}, "BE": {"nuclear": 4.0, "gas": 1.5, "wind": 3.0}}
+for z, rec in cn["zones"].items():
+    for g, m in TILT.get(z, {}).items():
+        if g in rec.get("generation", {}):
+            rec["generation"][g] = [None if v is None else round(v * m, 2) for v in rec["generation"][g]]
+cn["demo"] = True
+cn["source"] = "DEMO – szintetikus adat, nem valós mérés"
+col.write_json(str(ROOT / "demo-countries.json"), cn)
+print("országok:", len(cn["zones"]), "| hibák:", len(cn["errors"]))
 
 sys.modules["collector"] = col
 hspec = importlib.util.spec_from_file_location("history", ROOT / "history.py")

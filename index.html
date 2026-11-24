@@ -98,12 +98,13 @@ nav.tabs a{padding:7px 14px;border-radius:999px;border:1px solid var(--grid);col
 nav.tabs a[aria-current="page"]{color:var(--ink);border-color:var(--ink2);font-weight:650}
 .mapwrap{position:relative;width:100%}
 .mapwrap svg{display:block;width:100%;height:auto;overflow:visible}
+.card[data-src]::after{content:"Forrás: " attr(data-src);display:block;margin-top:14px;padding-top:8px;border-top:1px solid var(--grid);color:var(--muted);font-size:12px;line-height:1.4}
 text{font-family:inherit}
 </style>
 </head>
 <body>
 <main>
-  <nav class="tabs" aria-label="Nézetek"><a href="index.html" aria-current="page">Áttekintés</a><a href="muszaki.html">Mérnöki nézet</a><a href="europa.html">Európa és trendek</a></nav>
+  <nav class="tabs" aria-label="Nézetek"><a href="index.html" aria-current="page">Áttekintés</a><a href="muszaki.html">Mérnöki nézet</a><a href="europa.html">Európa és trendek</a><a href="foldgaz.html">Földgáz</a></nav>
   <div id="banners"></div>
   <header>
     <h1>Határkeresztező villamosenergia-áramlás</h1>
@@ -111,31 +112,33 @@ text{font-family:inherit}
     <div class="meta" id="meta"></div>
   </header>
 
-  <section class="card" id="heroCard" aria-live="polite"></section>
+  <section class="card" id="heroCard" data-src="ENTSO-E Transparency Platform (day-ahead árak 12.1.D, fizikai határkeresztező áramlás 12.1.G)" aria-live="polite"></section>
 
-  <section class="card">
+  <section class="card" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), óránként">
     <h2>Merre folyik a villamos energia?</h2>
     <p class="hint">A nyilak a legutóbbi olyan órára vonatkoznak, amelyre minden határ adata megvan. Kék nyíl: import Magyarországra, piros: export. A nyíl vastagsága és hossza a nettó teljesítménnyel arányos. Sematikus vázlat, nem pontos térkép.</p>
     <div class="mapwrap" id="mapWrap" role="img" aria-label="Magyarország sematikus térképe a határkeresztező áramlások nyilaival"></div>
   </section>
 
-  <section class="card">
+  <section class="card" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), óránként">
     <h2>Határonkénti áramlás</h2>
     <p class="hint">A nettó érték pozitív importnál, negatív exportnál. Az árak a jelenlegi day-ahead piaci időegységre vonatkoznak.</p>
     <div class="legend"><span><i style="background:var(--imp)"></i>Import (a szomszédból ide)</span><span><i style="background:var(--exp)"></i>Export (innen a szomszédba)</span></div>
     <div id="bordersWrap"></div>
   </section>
 
-  <section class="card">
-    <h2>Nettó import az elmúlt 48 órában</h2>
-    <p class="hint">Órás átlag, MW. A körvonalas oszlop a fő szám órája, a halvány oszlopokból még hiányzik legalább egy határ adata.</p>
+  <section class="card" data-src="ENTSO-E Transparency Platform – fizikai határkeresztező áramlás (12.1.G), nettó import saját számítás">
+    <h2>Nettó import <span id="netTitle">az elmúlt 48 órában</span></h2>
+    <p class="hint">Órás átlag, MW. A körvonalas oszlop a fő szám órája, a halvány oszlopokból még hiányzik legalább egy határ adata. Egérrel húzd végig a kívánt szakaszt a nagyításhoz (a két grafikon együtt nagyít), dupla kattintással vissza.</p>
+    <div class="chips" id="winNet" role="group" aria-label="Időablak"></div>
     <div class="legend"><span><i style="background:var(--imp)"></i>Nettó import</span><span><i style="background:var(--exp)"></i>Nettó export</span></div>
     <div class="chart" id="netChart" role="img" aria-label="Nettó import az elmúlt 48 órában, óránként"></div>
   </section>
 
-  <section class="card">
+  <section class="card" data-src="ENTSO-E Transparency Platform – day-ahead árak (12.1.D), zónánként">
     <h2>Day-ahead zónaárak</h2>
     <p class="hint">€/MWh. A Magyarország vonal mindig látszik, a szomszédos zónák ki- és bekapcsolhatók.</p>
+    <div class="chips" id="winPrice" role="group" aria-label="Időablak"></div>
     <div class="chips" id="chips"></div>
     <div class="chart" id="priceChart" role="img" aria-label="Day-ahead zónaárak, Magyarország és a szomszédos zónák"></div>
   </section>
@@ -194,6 +197,9 @@ async function load(){
 }
 
 // ---------- modell
+const WINS = [[24, "24 óra"], [48, "48 óra"], [72, "3 nap"], [168, "7 nap"]];
+let WIN = 48;
+let ZOOM = null;            // az egérrel húzott nagyítás: [kezdet ms, vég ms), az időablakon belül
 function model(){
   const T = D.hourly_ts.map(s => new Date(s));
   const n = T.length;
@@ -208,14 +214,47 @@ function model(){
   const P = D.prices, pts = P.ts.map(s => new Date(s));
   const step = pts.length > 1 ? pts[1] - pts[0] : 3600e3;
   let pIdx = -1; pts.forEach((t,i) => { if (t <= NOW) pIdx = i; });
-  M = {T, imp, exp, cnt, lastIdx, pts, step, pIdx};
+  const t0 = NOW.getTime() - WIN * 3600e3;
+  let i0 = 0; while (i0 < n - 1 && T[i0].getTime() < t0) i0++;
+  let j0 = 0; while (j0 < pts.length - 1 && pts[j0].getTime() + step <= t0) j0++;
+  let i1 = n, j1 = pts.length;
+  if (ZOOM){
+    const [za, zb] = ZOOM;
+    let a = 0; while (a < n - 1 && T[a].getTime() < za) a++;
+    let b = n; while (b > 1 && T[b - 1].getTime() >= zb) b--;
+    let c = 0; while (c < pts.length - 1 && pts[c].getTime() + step <= za) c++;
+    let d = pts.length; while (d > 1 && pts[d - 1].getTime() >= zb) d--;
+    if (b > a && d > c){ i0 = Math.max(i0, a); i1 = b; j0 = Math.max(j0, c); j1 = d; }
+  }
+  M = {T, imp, exp, cnt, lastIdx, pts, step, pIdx, i0, j0, i1, j1};
 }
 
 // ---------- megjelenítés
 function render(){
-  banners(); meta(); hero(); borders(); chips(); renderCharts(); foot();
+  banners(); meta(); hero(); borders(); chips(); winChips(); renderCharts(); foot();
 }
 function renderCharts(){ mapCard(); netChart(); priceChart(); }
+function winChips(){
+  ["winNet", "winPrice"].forEach(id => {
+    const box = $(id); box.innerHTML = "";
+    WINS.forEach(([w, name]) => {
+      const b = document.createElement("button"); b.className = "chip"; b.type = "button";
+      b.setAttribute("aria-pressed", w === WIN && !ZOOM ? "true" : "false"); b.textContent = name;
+      b.onclick = () => { WIN = w; ZOOM = null; model(); winChips(); renderCharts(); };
+      box.appendChild(b);
+    });
+    if (ZOOM){
+      const a = new Date(ZOOM[0]), z = new Date(ZOOM[1]);
+      const sp = document.createElement("span"); sp.style.cssText = "align-self:center;font-size:13.5px"; sp.textContent = "Nagyítva: " + fDate.format(a) + " " + fTime.format(a) + " – " + fDate.format(z) + " " + fTime.format(z);
+      const r = document.createElement("button"); r.className = "chip"; r.type = "button"; r.textContent = "Vissza az időablakra";
+      r.onclick = () => { ZOOM = null; model(); winChips(); renderCharts(); };
+      box.appendChild(sp); box.appendChild(r);
+    }
+  });
+  const nm = (WINS.find(x => x[0] === WIN) || [0, ""])[1];
+  $("netTitle").textContent = "– " + nm;
+  $("netChart").setAttribute("aria-label", "Nettó import, " + nm + ", óránként");
+}
 
 function banners(){
   const b = [];
@@ -360,8 +399,9 @@ function netChart(){
   const host = $("netChart"); host.innerHTML = "";
   const W = Math.max(320, host.clientWidth), H = W < 520 ? 250 : 300;
   const m = {l:54, r:10, t:22, b:36};
-  const narrow = W < 520, lstep = narrow ? 12 : 6;
-  const vals = D.net_import_mw, n = vals.length;
+  const narrow = W < 520, o = M.i0;
+  const vals = D.net_import_mw.slice(o, M.i1), n = vals.length, TT = M.T.slice(o, M.i1);
+  const lstep = n > 120 ? 24 : n > 72 ? (narrow ? 24 : 12) : (narrow ? 12 : 6);
   const finite = vals.filter(v => v != null);
   if (!finite.length){ host.innerHTML = '<div class="err">Nincs adat.</div>'; return; }
   const ny = nice(Math.min(0, ...finite), Math.max(0, ...finite), 5);
@@ -375,11 +415,11 @@ function netChart(){
     const tx = el("text", {x:x0 - 8, y:Y(t) + 4, "text-anchor":"end", "font-size":12, fill:ink2}, svg); tx.textContent = nf0.format(t);
   });
   const unit = el("text", {x:x0 - 8, y:y1 - 10, "text-anchor":"end", "font-size":11, fill:muted}, svg); unit.textContent = "MW";
-  M.T.forEach((t,i) => {
+  TT.forEach((t,i) => {
     const v = vals[i]; if (v == null) return;
     const cx = x0 + band * (i + .5), top = Math.min(Y(v), Y(0)), hh = Math.max(1, Math.abs(Y(v) - Y(0)));
-    el("rect", {x:cx - bw/2, y:top, width:bw, height:hh, rx:Math.min(3, bw/3), fill: v >= 0 ? css("--imp") : css("--exp"), opacity: D.complete[i] ? 1 : .38,
-      stroke: i === M.lastIdx ? css("--ink") : "none", "stroke-width": 2}, svg);
+    el("rect", {x:cx - bw/2, y:top, width:bw, height:hh, rx:Math.min(3, bw/3), fill: v >= 0 ? css("--imp") : css("--exp"), opacity: D.complete[i + o] ? 1 : .38,
+      stroke: i + o === M.lastIdx ? css("--ink") : "none", "stroke-width": 2}, svg);
     const p = localParts(t);
     if (p.h % lstep === 0){
       const lab = el("text", {x:cx, y:y0 + 17, "text-anchor":"middle", "font-size":narrow ? 11 : 12, fill:ink2}, svg);
@@ -390,16 +430,43 @@ function netChart(){
   });
   hover(host, svg, W, H, x0, x1, n, i => {
     const v = vals[i]; if (v == null) return null;
-    const t = M.T[i], t1 = new Date(t.getTime() + 3600e3);
+    const t = TT[i], t1 = new Date(t.getTime() + 3600e3);
     return {x:x0 + band * (i + .5), html:
       '<div class="t">' + fDate.format(t) + ' ' + fTime.format(t) + '–' + fTime.format(t1) + '</div>' +
       row(v >= 0 ? css("--imp") : css("--exp"), v >= 0 ? "Nettó import" : "Nettó export", nf0.format(Math.abs(v)) + " MW") +
-      row(css("--imp"), "Import összesen", nf0.format(M.imp[i]) + " MW") +
-      row(css("--exp"), "Export összesen", nf0.format(M.exp[i]) + " MW") +
-      (D.complete[i] ? "" : '<div style="color:var(--muted);margin-top:3px">Nem teljes óra: ' + M.cnt[i] + " határ adata van</div>")};
+      row(css("--imp"), "Import összesen", nf0.format(M.imp[i + o]) + " MW") +
+      row(css("--exp"), "Export összesen", nf0.format(M.exp[i + o]) + " MW") +
+      (D.complete[i + o] ? "" : '<div style="color:var(--muted);margin-top:3px">Nem teljes óra: ' + M.cnt[i + o] + " határ adata van</div>")};
+  });  dragZoom(svg, W, x0, x1, y0, y1, (xa, xb) => {
+    const f = (x) => Math.max(0, Math.min(n - 1, Math.floor((x - x0) / (x1 - x0) * n)));
+    return [TT[f(xa)].getTime(), TT[f(xb)].getTime() + 3600e3];
   });
 }
 function row(color, k, v){ return '<div class="row"><span><i style="background:' + color + '"></i>' + k + '</span><b class="num">' + v + '</b></div>'; }
+
+// Egérrel húzott kijelölés = nagyítás mindkét grafikonra; dupla kattintás = vissza az időablakra.
+let DRAG = null;
+function applyZoom(a, b){
+  if (b - a < 6 * 3600e3){ const c = (a + b) / 2; a = c - 3 * 3600e3; b = c + 3 * 3600e3; }       // legalább 6 óra
+  ZOOM = [a, b]; model(); winChips(); renderCharts();
+}
+addEventListener("pointerup", () => {
+  if (!DRAG) return; const d = DRAG; DRAG = null; d.rect.setAttribute("visibility", "hidden");
+  if (d.ex == null || Math.abs(d.ex - d.sx) < 12) return;
+  const r = d.toRange(Math.min(d.sx, d.ex), Math.max(d.sx, d.ex));
+  applyZoom(r[0], r[1]);
+});
+function dragZoom(svg, W, x0, x1, y0, y1, toRange){
+  const rect = el("rect", {y:y1, height:y0 - y1, fill:css("--c1"), opacity:.18, visibility:"hidden", "pointer-events":"none"}, svg);
+  const px = (ev) => { const r = svg.getBoundingClientRect(); return Math.max(x0, Math.min(x1, (ev.clientX - r.left) / r.width * W)); };
+  svg.style.cursor = "crosshair";
+  svg.addEventListener("pointerdown", ev => { if (ev.pointerType !== "mouse" || ev.button !== 0) return; ev.preventDefault(); DRAG = {rect, sx:px(ev), ex:null, toRange}; });
+  svg.addEventListener("pointermove", ev => {
+    if (!DRAG || DRAG.rect !== rect) return; const x = px(ev); DRAG.ex = x;
+    rect.setAttribute("x", Math.min(DRAG.sx, x)); rect.setAttribute("width", Math.abs(x - DRAG.sx)); rect.setAttribute("visibility", Math.abs(x - DRAG.sx) > 6 ? "visible" : "hidden");
+  });
+  svg.addEventListener("dblclick", () => { if (ZOOM){ ZOOM = null; model(); winChips(); renderCharts(); } });
+}
 
 // közös hover: függőleges vezetővonal + súgó
 function hover(host, svg, W, H, x0, x1, n, info){
@@ -426,15 +493,17 @@ function priceChart(){
   const P = D.prices;
   if (!P.ts.length || !P.zones.HU){ host.innerHTML = '<div class="err">Nincs elérhető ár adat.</div>'; return; }
   const W = Math.max(320, host.clientWidth), H = W < 520 ? 280 : 340;
-  const narrow = W < 520, lstep = narrow ? 12 : 6;
+  const narrow = W < 520, j0 = M.j0, pts = M.pts.slice(j0, M.j1), PZ = {};
+  Object.keys(P.zones).forEach(z => { PZ[z] = P.zones[z].slice(j0, M.j1); });
   const m = {l:54, r:narrow ? 44 : 64, t:22, b:36};
   const zs = ["HU", ...Object.keys(P.zones).filter(z => z !== "HU" && selected.has(z))];
-  const n = P.ts.length, step = M.step;
-  const all = zs.flatMap(z => P.zones[z]).filter(v => v != null);
+  const n = pts.length, step = M.step;
+  const spanH = n * step / 3600e3, lstep = spanH > 120 ? 24 : spanH > 72 ? (narrow ? 24 : 12) : (narrow ? 12 : 6);
+  const all = zs.flatMap(z => PZ[z]).filter(v => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * .08 || 5;
   const lo0 = Math.min(...all) - pad, hi0 = Math.max(...all) + pad;
   const ny = nice(Math.min(lo0, 0), Math.max(hi0, 0), 5);
-  const t0 = M.pts[0].getTime(), t1 = M.pts[n - 1].getTime() + step;
+  const t0 = pts[0].getTime(), t1 = pts[n - 1].getTime() + step;
   const x0 = m.l, x1 = W - m.r, y0 = H - m.b, y1 = m.t;
   const X = t => x0 + (t - t0) / (t1 - t0) * (x1 - x0);
   const Y = v => y0 - (v - ny.lo) / (ny.hi - ny.lo) * (y0 - y1);
@@ -449,19 +518,24 @@ function priceChart(){
   // napválasztók és időtengely
   const nowDay = localDayKey(NOW);
   let lastKey = null;
-  M.pts.forEach((t,i) => {
+  const dayW = (x1 - x0) / (spanH / 24); let lastLabX = -1e9, lastLabW = 0;
+  const dn = (k) => Math.round((Date.UTC(Math.floor(k / 10000), Math.floor(k / 100) % 100 - 1, k % 100) - Date.UTC(Math.floor(nowDay / 10000), Math.floor(nowDay / 100) % 100 - 1, nowDay % 100)) / 864e5);
+  pts.forEach((t,i) => {
     const p = localParts(t), key = localDayKey(t);
     if (key !== lastKey){
       lastKey = key;
       const x = X(t.getTime());
       if (i > 0) el("line", {x1:x, x2:x, y1:y1, y2:y0, stroke:grid, "stroke-width":1}, svg);
-      const rel = key === nowDay ? "ma" : (key > nowDay ? "holnap" : "tegnap");
+      const dd = dn(key), rel = dd === 0 ? "ma" : dd === 1 ? "holnap" : dd === -1 ? "tegnap" : fDate.format(t);
       const dl = el("text", {x:x + 6, y:y1 - 9 + 0, "font-size":12, fill:ink2, "font-weight":650}, svg);
-      dl.textContent = narrow ? rel : rel + " · " + fWeek.format(t);
+      dl.textContent = dayW < 62 ? String(p.d) + "." : (narrow || dayW < 150) ? rel : rel + " · " + fWeek.format(t);
+      if (x + 6 < lastLabX + lastLabW + 6) dl.setAttribute("visibility", "hidden"); else { lastLabX = x + 6; lastLabW = dl.textContent.length * 6.9; }
     }
     if (p.h % lstep === 0 && localParts(new Date(t.getTime() - step)).h !== p.h){
       const x = X(t.getTime());
-      const lab = el("text", {x:x, y:y0 + 17, "text-anchor":"middle", "font-size":narrow ? 11 : 12, fill:ink2}, svg); lab.textContent = String(p.h).padStart(2,"0") + ":00";
+      if (lstep < 24){
+        const lab = el("text", {x:x, y:y0 + 17, "text-anchor":"middle", "font-size":narrow ? 11 : 12, fill:ink2}, svg); lab.textContent = String(p.h).padStart(2,"0") + ":00";
+      }
       el("line", {x1:x, x2:x, y1:y0, y2:y0 + 4, stroke:muted}, svg);
     }
   });
@@ -476,10 +550,10 @@ function priceChart(){
   // vonalak (lépcsős: egy piaci időegységen belül az ár állandó)
   const ends = [];
   zs.forEach(z => {
-    const v = P.zones[z]; let d = "", open = false, lastV = null;
+    const v = PZ[z]; let d = "", open = false, lastV = null;
     v.forEach((val,i) => {
       if (val == null){ open = false; return; }
-      const xa = X(M.pts[i].getTime()), xb = X(M.pts[i].getTime() + step), y = Y(val);
+      const xa = X(pts[i].getTime()), xb = X(pts[i].getTime() + step), y = Y(val);
       d += (open ? "L" : "M") + xa.toFixed(1) + " " + y.toFixed(1) + "L" + xb.toFixed(1) + " " + y.toFixed(1);
       open = true; lastV = {x:xb, y, val};
     });
@@ -495,9 +569,12 @@ function priceChart(){
   });
 
   hover(host, svg, W, H, x0, x1, n, i => {
-    const t = M.pts[i], tt = new Date(t.getTime() + step);
-    const rows = zs.map(z => { const v = P.zones[z][i]; return row(zoneColor(z), NAMES[z] || z, v == null ? "–" : nf1.format(v) + " €/MWh"); }).join("");
+    const t = pts[i], tt = new Date(t.getTime() + step);
+    const rows = zs.map(z => { const v = PZ[z][i]; return row(zoneColor(z), NAMES[z] || z, v == null ? "–" : nf1.format(v) + " €/MWh"); }).join("");
     return {x:X(t.getTime() + step/2), html:'<div class="t">' + fDate.format(t) + ' ' + fTime.format(t) + '–' + fTime.format(tt) + '</div>' + rows};
+  });  dragZoom(svg, W, x0, x1, y0, y1, (xa, xb) => {
+    const tm = (x) => t0 + (x - x0) / (x1 - x0) * (t1 - t0), snap = (t) => Math.round(t / step) * step;
+    return [snap(tm(xa)), snap(tm(xb))];
   });
 }
 

@@ -58,6 +58,7 @@ print("3 OK  inkrementális: 1 oldal / ország")
 # 4. kulcs nélkül: nincs tározó, de az áramlás megvan
 out3 = run(FakeHttp(TODAY), key="")
 assert out3["agsi"] is None and out3["flows"] and any("GIE_API_KEY" in e for e in out3["errors"])
+assert out3["lng"] is None                    # kulcs nélkül az ALSI-t sem hívjuk
 print("4 OK  kulcs nélkül")
 
 # 5. hibás kulcs: érthető kilépés
@@ -84,5 +85,46 @@ out6 = run(FakeHttp(TODAY, no_opd=True))
 assert out6["flows"] and len(out6["flows"]["points"]) == 6
 assert not any("Belső" in p["label"] for p in out["flows"]["points"])   # belső (nem határ) pont kimarad
 print("8 OK  tartalék felderítés")
+
+# 9. LNG (ALSI): EU + országok + terminálok, GWh és GWh/nap
+L = out["lng"]
+assert L, out["errors"]
+assert L["dates"][0] == FROM and L["dates"][-1] == "2026-11-22" and len(L["dates"]) == len(set(L["dates"]))
+assert set(L["series"]) >= {"EU", "ES", "HR", "PL", "GR", "IT", "GB"}, set(L["series"])
+assert all(set(s) == set(gas.LNG_FIELDS) and len(s["inv"]) == len(L["dates"]) for s in L["series"].values())
+assert L["names"]["HR"] == "Horvátország" and L["names"]["EU"] == "EU összesen"
+assert len(L["fac"]) == 21 and len(L["fac_dates"]) == gas.LNG_FAC_DAYS, (len(L["fac"]), len(L["fac_dates"]))
+assert all(len(x["inv"]) == len(L["fac_dates"]) == len(x["send"]) for x in L["fac"])
+krk = next(x for x in L["fac"] if x["country"] == "HR")
+assert krk["type"] == "FSRU" and krk["lat"] == 45.22 and krk["lon"] == 14.57 and krk["company"].startswith("LNG Croatia")
+assert krk["latest"]["date"] == "2026-11-22" and krk["latest"]["dtmi"] > krk["latest"]["inv"] > 0
+# a terminálok összege = az EU-s országos adat (GB nélkül) az utolsó napra
+eu_send = sum(x["send"][-1] for x in L["fac"] if x["country"] != "GB")
+assert abs(eu_send - L["series"]["EU"]["send"][-1]) < 1.5, (eu_send, L["series"]["EU"]["send"][-1])
+assert L["fac"][0]["latest"]["dtmi"] >= L["fac"][-1]["latest"]["dtmi"]          # DTMI szerint csökkenő sorrend
+print("9 OK  LNG:", len(L["series"]), "sorozat,", len(L["fac"]), "terminál, EU kiadás", L["series"]["EU"]["send"][-1], "GWh/nap")
+
+# 10. LNG inkrementális: országonként egy oldal, ugyanaz az eredmény
+h3 = FakeHttp(TODAY)
+out7 = run(h3, existing=json.loads(json.dumps(out)))
+al = [p for u, p in h3.calls if "alsi" in u]
+assert len(al) == len(L["series"]), len(al)      # EU + minden ország, mind 1 oldal
+assert all(p["from"] >= "2026-11-01" for p in al), al[:3]
+assert out7["lng"]["dates"] == L["dates"] and out7["lng"]["series"]["EU"]["send"] == L["series"]["EU"]["send"]
+assert [x["inv"] for x in out7["lng"]["fac"]] == [x["inv"] for x in L["fac"]]
+print("10 OK  LNG inkrementális:", len(al), "hívás")
+
+# 11. ALSI leáll: a tározó és az áramlás marad, a régi LNG megmarad (jelezve); régi nélkül üres
+out8 = run(FakeHttp(TODAY, fail_alsi=True), existing=out)
+assert out8["agsi"] and out8["flows"] and out8["lng"] == out["lng"] and any("ALSI" in e for e in out8["errors"])
+assert any("lng: most nem sikerült" in n for n in out8["notes"])
+out9 = run(FakeHttp(TODAY, fail_alsi=True))
+assert out9["lng"] is None and out9["agsi"] and out9["flows"]
+print("11 OK  ALSI-hiba nem viszi el a többit")
+
+# 12. az ALSI-kulcs elutasítva (403): nem áll le a futás, csak jelzi
+out10 = run(FakeHttp(TODAY, alsi_key="mas"))
+assert out10["agsi"] and out10["flows"] and out10["lng"] is None and any("ALSI" in e and "403" in e for e in out10["errors"]), out10["errors"]
+print("12 OK  ALSI 403 -> figyelmeztetés, a futás megy tovább")
 
 print("MINDEN TESZT ÁTMENT")

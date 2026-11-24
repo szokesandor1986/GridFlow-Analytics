@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Földgáz-adatgyűjtő az Európa és trendek oldal földgáz-szekcióihoz (europa.html). Kimenet: gas.json.
 
-Két forrás, egymástól függetlenül (az egyik hibája nem viszi el a másikat):
+Három forrás, egymástól függetlenül (az egyik hibája nem viszi el a másikat):
 
 1. GIE AGSI+ (https://agsi.gie.eu/api): a tárolók töltöttsége, a tárolt mennyiség (TWh), a munkagáz-kapacitás,
    a betáplálás/kivétel (GWh/nap) és ezek kapacitása. Magyarország, az EU összesen és a szomszédos/fontos országok.
    Ingyenes személyes kulcs kell hozzá (https://agsi.gie.eu regisztráció), környezeti változó: GIE_API_KEY,
    a kulcs a `x-key` fejlécben megy. Korlát: 60 hívás/perc, ezért a hívások között ~1,1 s szünet van,
    és ha már van gas.json, csak az utolsó napok töltődnek újra.
-2. ENTSOG Transparency Platform (https://transparency.entsog.eu/api/v1): a magyar határpontok fizikai gázáramlása
+2. GIE ALSI (https://alsi.gie.eu/api): az LNG-terminálok napi készlete (GWh), kiadása a gázrendszerbe (send-out, GWh/nap),
+   a névleges maximális készlet (DTMI) és referencia-kiadás (DTRS). EU összesen, országonként és terminálonként.
+   Ugyanaz a GIE_API_KEY és ugyanaz az `x-key` fejléc, mint az AGSI+-nál; ha az ALSI nem elérhető, a többi rész ettől még megvan.
+3. ENTSOG Transparency Platform (https://transparency.entsog.eu/api/v1): a magyar határpontok fizikai gázáramlása
    (indikátor: "Physical Flow", napi, kWh/nap -> GWh/nap). Kulcs nem kell. A határpontokat futáskor maga
    deríti fel az /interconnections végpontról (a magyar üzemeltető oldalán), nincs bedrótozott kulcslista.
 
@@ -28,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 AGSI_BASE = "https://agsi.gie.eu/api"
+ALSI_BASE = "https://alsi.gie.eu/api"
 ENTSOG_BASE = "https://transparency.entsog.eu/api/v1"
 
 COUNTRY_NAMES = {
@@ -35,6 +39,9 @@ COUNTRY_NAMES = {
     "CZ": "Csehország", "DE": "Németország", "IT": "Olaszország", "PL": "Lengyelország", "BG": "Bulgária",
     "NL": "Hollandia", "FR": "Franciaország", "UA": "Ukrajna", "RS": "Szerbia", "SI": "Szlovénia",
     "EU": "EU összesen",
+    "ES": "Spanyolország", "BE": "Belgium", "PT": "Portugália", "GR": "Görögország", "LT": "Litvánia", "FI": "Finnország",
+    "SE": "Svédország", "GB": "Egyesült Királyság", "MT": "Málta", "EE": "Észtország", "CY": "Ciprus", "TR": "Törökország",
+    "LV": "Lettország", "IE": "Írország", "DK": "Dánia", "NO": "Norvégia",
 }
 # sorrend = fontossági sorrend (a legfontosabbak először)
 AGSI_COUNTRIES = ["HU", "AT", "SK", "RO", "HR", "UA", "DE", "IT", "CZ", "PL", "BG", "NL", "FR"]
@@ -43,6 +50,11 @@ LITE_FIELDS = ("full", "gis", "wgv")                                            
 AGSI_KEYS = {"full": "full", "gis": "gasInStorage", "wgv": "workingGasVolume", "inj": "injection",
              "wdr": "withdrawal", "injCap": "injectionCapacity", "wdrCap": "withdrawalCapacity", "trend": "trend"}
 DEC = {"full": 1, "gis": 3, "wgv": 3, "inj": 1, "wdr": 1, "injCap": 1, "wdrCap": 1, "trend": 3}
+# LNG (ALSI): ha az EU-összesítő nem árulja el az országokat, ezekkel próbálkozunk; a GB nem EU-tag, de lehet adata
+LNG_FALLBACK = ["ES", "FR", "IT", "NL", "BE", "PL", "DE", "GR", "PT", "LT", "HR", "FI", "SE", "MT", "GB"]
+LNG_EXTRA = ["GB"]
+LNG_FIELDS = ("inv", "send", "dtmi", "dtrs")      # készlet GWh, kiadás GWh/nap, max. készlet GWh, referencia-kiadás GWh/nap
+LNG_FAC_DAYS = 400                                # a terminálonkénti napi sorozat hossza
 DEFAULT_FROM = "2021-10-01"      # a 2021/22-es gázév kezdete
 
 
@@ -90,31 +102,35 @@ def status_of(exc):
 
 
 # ------------------------------------------------------------------ AGSI+
-def agsi_fetch(http, key, throttle, params, deadline, errors, label):
-    """Az összes oldal egy lekérdezéshez. Visszaadja a rekordok listáját (vagy üreset)."""
+def agsi_fetch(http, key, throttle, params, deadline, errors, label, base=AGSI_BASE, tag="AGSI", fatal=True):
+    """Az összes oldal egy lekérdezéshez (AGSI+ és ALSI egyaránt). Visszaadja a rekordok listáját (vagy üreset).
+    fatal=False: hibás kulcsnál nem állítja le a futást, csak jelzi (az ALSI-nál, hogy a tározói rész megmaradjon)."""
     rows, page = [], 1
     while True:
         if time.monotonic() > deadline:
-            errors.append(f"AGSI {label}: időkeret lejárt")
+            errors.append(f"{tag} {label}: időkeret lejárt")
             break
         p = dict(params, page=page, size=300)
         data = None
         for attempt in (1, 2):
             throttle.wait()
             try:
-                data = http.get(AGSI_BASE, params=p, headers={"x-key": key})
+                data = http.get(base, params=p, headers={"x-key": key})
                 break
             except Exception as exc:  # noqa: BLE001
                 st = status_of(exc)
                 if st in (401, 403):
-                    sys.exit(f"AGSI+ HTTP {st}: érvénytelen vagy hiányzó GIE_API_KEY.")
+                    if fatal:
+                        sys.exit(f"{tag} HTTP {st}: érvénytelen vagy hiányzó GIE_API_KEY.")
+                    errors.append(f"{tag} {label}: HTTP {st} (a kulcs nem érvényes erre a platformra)")
+                    return rows
                 if st == 429 and attempt == 1:
                     time.sleep(61)         # a limit túllépése 60 másodperces blokkot ad
                     continue
                 if attempt == 1:
                     time.sleep(3)
                     continue
-                errors.append(f"AGSI {label}: {exc.__class__.__name__} {exc}")
+                errors.append(f"{tag} {label}: {exc.__class__.__name__} {exc}")
         if data is None:
             break
         rows += data.get("data") or []
@@ -205,6 +221,162 @@ def collect_agsi(http, key, existing=None, from_date=DEFAULT_FROM, today=None, b
         "names": {c: COUNTRY_NAMES.get(c, c) for c in series},
         "hu_last_day": hu_latest, "hu_updated": upd,
         "facilities": facilities,
+    }, errors
+
+
+# ------------------------------------------------------------------ ALSI (LNG)
+def lng_pair(v):
+    """Az ALSI mennyiségei {"lng": 10^3 m3 LNG, "gwh": GWh} párok; ha csak szám jön, GWh-nak vesszük."""
+    if isinstance(v, dict):
+        return num(v.get("lng")), num(v.get("gwh"))
+    return None, num(v)
+
+
+def lng_vals(rec):
+    """Egy ALSI rekord (ország vagy terminál) mérőszámai. inv/dtmi: GWh, send/dtrs: GWh/nap."""
+    inv_l, inv_g = lng_pair(rec.get("inventory"))
+    dt_l, dt_g = lng_pair(rec.get("dtmi"))
+    return {"inv": inv_g, "send": num(rec.get("sendOut")), "dtmi": dt_g, "dtrs": num(rec.get("dtrs")),
+            "invLng": inv_l, "dtmiLng": dt_l}
+
+
+def lng_leaves(rec):
+    """A rekord alatti terminálok (a levélcsomópontok), a vállalatuk nevével. EU -> ország -> vállalat -> terminál."""
+    res = []
+
+    def walk(node, company):
+        kids = node.get("children") or []
+        if not kids:
+            res.append((node, company))
+            return
+        for ch in kids:
+            walk(ch, node.get("name") if node is not rec else company)
+    for ch in rec.get("children") or []:
+        walk(ch, None)
+    return res
+
+
+def collect_alsi(http, key, existing=None, from_date=DEFAULT_FROM, today=None, budget_s=420, throttle=None):
+    """Visszaad: (lng szótár vagy None, hibák). Inkrementális, mint az AGSI+: csak az utolsó ~14 nap töltődik újra."""
+    today = today or date.today()
+    throttle = throttle or Throttle()
+    deadline = time.monotonic() + budget_s
+    errors = []
+    old = existing or {}
+    old_dates = old.get("dates") or []
+    inc_from = None
+    if old_dates and old_dates[0] <= from_date:
+        inc_from = (datetime.strptime(old_dates[-1], "%Y-%m-%d").date() - timedelta(days=14)).isoformat()
+    start = inc_from or from_date
+    fac_cut = (today - timedelta(days=LNG_FAC_DAYS)).isoformat()
+    fac_start = max(start, fac_cut)
+
+    def fetch(label, params):
+        return agsi_fetch(http, key, throttle, params, deadline, errors, label, base=ALSI_BASE, tag="ALSI", fatal=False)
+
+    per = {}                       # kód -> {dátum: {mező: érték}}
+    fac = {}                       # terminál-kulcs -> {meta, days:{dátum: (inv, send)}, latest}
+    names = {}
+    last_day, upd = None, None
+
+    # 1) EU összesen (+ az országok felderítése a legutóbbi rekord gyermekeiből)
+    rows = fetch("EU", {"type": "eu", "from": start, "to": today.isoformat()})
+    if not rows:
+        return None, errors
+    per["EU"] = {str(r.get("gasDayStart"))[:10]: lng_vals(r) for r in rows if len(str(r.get("gasDayStart") or "")) >= 10}
+    newest = max(rows, key=lambda r: str(r.get("gasDayStart")))
+    last_day, upd = str(newest.get("gasDayStart"))[:10], newest.get("updatedAt")
+    found = []
+    for ch in newest.get("children") or []:
+        c = str(ch.get("code") or "").upper()
+        if len(c) == 2 and c.isalpha():
+            found.append(c)
+            names[c] = ch.get("name")
+    countries = [c for c in found if c != "EU"] or list(LNG_FALLBACK)
+    for c in LNG_EXTRA:
+        if c not in countries:
+            countries.append(c)
+
+    # 2) országonként: napi sorozat + a terminálok napi értékei (ugyanabból a válaszból)
+    for code in countries:
+        rows = fetch(code, {"country": code, "from": start, "to": today.isoformat()})
+        if not rows:
+            continue
+        per[code] = {}
+        for r in rows:
+            d = str(r.get("gasDayStart") or "")[:10]
+            if len(d) != 10:
+                continue
+            per[code][d] = lng_vals(r)
+            for node, company in lng_leaves(r):
+                key_ = node.get("code") or f"{code}:{node.get('name')}"
+                f = fac.setdefault(key_, {"meta": {}, "days": {}, "latest": None})
+                v = lng_vals(node)
+                if d >= fac_start:
+                    f["days"][d] = (v["inv"], v["send"])
+                if f["latest"] is None or d >= f["latest"][0]:
+                    f["latest"] = (d, v, node.get("status"))
+                    f["meta"] = {"name": node.get("name"), "code": node.get("code"), "company": company, "country": code,
+                                 "type": node.get("type"), "lat": num(node.get("latitude")), "lon": num(node.get("longitude"))}
+    if len(per) < 2:
+        errors.append("ALSI: az országos sorozatok nem érkeztek meg")
+        return None, errors
+
+    # 3) régi + új összefésülése (az új felülír)
+    old_series = old.get("series") or {}
+    merged = {}
+    for code, m_new in per.items():
+        m = {}
+        if code in old_series and old_dates:
+            for i, d in enumerate(old_dates):
+                if d >= from_date:
+                    m[d] = {f_: (old_series[code].get(f_) or [None] * len(old_dates))[i] for f_ in LNG_FIELDS}
+        m.update({d: {f_: v.get(f_) for f_ in LNG_FIELDS} for d, v in m_new.items()})
+        merged[code] = m
+    for code, sr in old_series.items():             # ami most nem jött meg, az régi értékekkel megmarad
+        if code not in merged and old_dates:
+            merged[code] = {d: {f_: (sr.get(f_) or [None] * len(old_dates))[i] for f_ in LNG_FIELDS}
+                            for i, d in enumerate(old_dates) if d >= from_date}
+    dates = sorted({d for m in merged.values() for d in m if d >= from_date})
+    series = {code: {f_: [None if m.get(d, {}).get(f_) is None else round(m[d][f_], 1) for d in dates] for f_ in LNG_FIELDS}
+              for code, m in merged.items() if m}
+
+    # terminálok: a legutóbbi pillanatkép + a napi sorozat az utolsó LNG_FAC_DAYS napra
+    old_fd = old.get("fac_dates") or []
+    old_fac = {(x.get("code") or f"{x.get('country')}:{x.get('name')}"): x for x in (old.get("fac") or [])}
+    fac_dates = sorted({d for d in dates if d >= fac_cut})
+    facs = []
+    for key_, f in fac.items():
+        d_new = f["days"]
+        old_x = old_fac.get(key_) or {}
+        inv_s, snd_s = [], []
+        for d in fac_dates:
+            if d in d_new:
+                inv_s.append(d_new[d][0])
+                snd_s.append(d_new[d][1])
+            elif d in old_fd and old_x.get("inv"):
+                j = old_fd.index(d)
+                inv_s.append(old_x["inv"][j])
+                snd_s.append(old_x["send"][j])
+            else:
+                inv_s.append(None)
+                snd_s.append(None)
+        d_l, v, st = f["latest"]
+        meta = f["meta"]
+        facs.append({
+            "name": meta["name"], "code": meta["code"], "company": meta["company"], "country": meta["country"],
+            "type": meta["type"], "lat": meta["lat"], "lon": meta["lon"],
+            "inv": [None if x is None else round(x, 1) for x in inv_s], "send": [None if x is None else round(x, 1) for x in snd_s],
+            "latest": {"date": d_l, "status": st, **{k: (None if v[k] is None else round(v[k], 2)) for k in ("inv", "send", "dtmi", "dtrs", "invLng", "dtmiLng")}},
+        })
+    facs.sort(key=lambda x: -(x["latest"]["dtmi"] or 0))
+    if not names.get("EU"):
+        names["EU"] = COUNTRY_NAMES["EU"]
+    return {
+        "dates": dates, "series": series,
+        "names": {c: COUNTRY_NAMES.get(c) or names.get(c) or c for c in series},
+        "fac_dates": fac_dates, "fac": facs,
+        "last_day": last_day, "updated": upd,
     }, errors
 
 
@@ -369,8 +541,8 @@ def collect(http, key, existing=None, today=None, budget_s=420, from_date=DEFAUL
     errors, notes = [], []
     out = {
         "schema": 1, "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "source": "GIE AGSI+; ENTSOG Transparency Platform", "demo": False,
-        "agsi": None, "flows": None, "errors": errors, "notes": notes,
+        "source": "GIE AGSI+; GIE ALSI; ENTSOG Transparency Platform", "demo": False,
+        "agsi": None, "lng": None, "flows": None, "errors": errors, "notes": notes,
     }
     if key:
         try:
@@ -383,6 +555,13 @@ def collect(http, key, existing=None, today=None, budget_s=420, from_date=DEFAUL
             errors.append(f"AGSI+: {exc.__class__.__name__} {exc}")
     else:
         errors.append("AGSI+: nincs GIE_API_KEY, a tározói adatok kimaradnak")
+    if key:
+        try:
+            lng, e = collect_alsi(http, key, (existing or {}).get("lng"), from_date, today, budget_s, throttle)
+            errors += e
+            out["lng"] = lng
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ALSI: {exc.__class__.__name__} {exc}")
     try:
         flows, e, n = collect_flows(http, today=today)
         errors += e
@@ -391,7 +570,7 @@ def collect(http, key, existing=None, today=None, budget_s=420, from_date=DEFAUL
     except Exception as exc:  # noqa: BLE001
         errors.append(f"ENTSOG: {exc.__class__.__name__} {exc}")
     # ha egy rész most nem sikerült, a korábbi jó adat megmarad (jelezve)
-    for part in ("agsi", "flows"):
+    for part in ("agsi", "lng", "flows"):
         if out[part] is None and (existing or {}).get(part):
             out[part] = existing[part]
             notes.append(f"{part}: most nem sikerült frissíteni, az előző futás adata maradt")
@@ -421,6 +600,7 @@ def main():
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     a = out["agsi"]
     print(f"Kész: {args.out} | tározó: {'igen, ' + str(len(a['dates'])) + ' nap, ' + str(len(a['series'])) + ' sorozat' if a else 'nincs'}"
+          f" | LNG: {'igen, ' + str(len(out['lng']['fac'])) + ' terminál, ' + str(len(out['lng']['series'])) + ' sorozat' if out['lng'] else 'nincs'}"
           f" | határpont-áramlás: {'igen, ' + str(len(out['flows']['points'])) + ' pont' if out['flows'] else 'nincs'}"
           f" | hibák: {len(out['errors'])}")
     for e in out["errors"] + out["notes"]:

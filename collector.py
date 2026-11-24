@@ -158,7 +158,7 @@ def collect(client, now=None, hours=48, budget_s=240, workers=8):
 
     # ---- kérések beadása (fontossági sorrendben), majd az eredmények összegyűjtése
     local_midnight = now.tz_convert("Europe/Budapest").normalize()
-    p_start = local_midnight - pd.Timedelta(days=1)
+    p_start = local_midnight - pd.Timedelta(days=max(1, -(-hours // 24)))      # az ársor a kért időablakig nyúlik vissza
     p_end = local_midnight + pd.Timedelta(days=2)
     for code in NEIGHBOURS:
         for direction, a, b in (("import", code, HOME), ("export", HOME, code)):
@@ -330,6 +330,124 @@ def group_sum(by_type, idx):
     return res
 
 
+# ---------------------------------------------------------------- 17.1.I: pénzügyi kiadások és bevételek a kiegyenlítésben
+FIN_DIR = {"A01": "up", "A02": "down"}
+
+
+def _xml_docs(content):
+    """ZIP-ből vagy nyers XML-ből a dokumentumok szövege (az ENTSO-E mindkét formát adhatja)."""
+    import io
+    import zipfile
+    if content[:2] == b"PK":
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            return [z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.lower().endswith(".xml")]
+    return [content.decode("utf-8", "replace")]
+
+
+def parse_financial_balance(content):
+    """Az A87 dokumentum feldolgozása. Védekező: a pontok szerkezetét nem feltételezi szigorúan, hanem a levélelemek nevei
+    alapján keresi az összeget (…amount), az irányt (…direction) és a pozíciót.
+    Visszatér: (sorok, minta), a sor {month: 'YYYY-MM' (budapesti hónap), dir: 'up'|'down'|nyers kód, amount, currency},
+    a minta a nyers szerkezet rövid leírása (a napló hibakereséséhez)."""
+    import bs4
+    rows, sample = [], None
+    for text in _xml_docs(content):
+        soup = bs4.BeautifulSoup(text, "html.parser")
+        for ts in soup.find_all("timeseries"):
+            leaf = lambda tag: {c.name: c.get_text(strip=True) for c in tag.find_all(True) if not c.find(True)}  # noqa: E731
+            tl = {k: v for k, v in leaf(ts).items() if k not in ("position", "start", "end")}
+            cur = next((v for k, v in tl.items() if "currency" in k), "")
+            ts_dir = next((v for k, v in tl.items() if k.endswith("direction")), None)
+            for period in ts.find_all("period"):
+                res = (period.find("resolution").get_text(strip=True) if period.find("resolution") else "P1M")
+                start = pd.Timestamp(period.find("start").get_text(strip=True))
+                if start.tzinfo is None:
+                    start = start.tz_localize("UTC")
+                for pt in period.find_all("point"):
+                    pl = leaf(pt)
+                    amount = next((v for k, v in pl.items() if k.endswith("amount") or k == "quantity"), None)
+                    d = next((v for k, v in pl.items() if k.endswith("direction")), ts_dir)
+                    pos = int(pl.get("position", "1").replace(",", "") or 1)
+                    if sample is None:
+                        sample = {"timeseries": sorted(tl), "point": sorted(pl), "resolution": res, "value_example": pl}
+                    if amount is None:
+                        continue
+                    try:
+                        val = float(amount.replace(",", ""))
+                    except ValueError:
+                        continue
+                    t0 = start + pd.DateOffset(months=pos - 1) if res.upper() == "P1M" else start
+                    rows.append({"month": t0.tz_convert("Europe/Budapest").strftime("%Y-%m"), "dir": FIN_DIR.get(d, str(d)),
+                                 "amount": val, "currency": cur})
+    return rows, sample
+
+
+def query_financial_balance(client, zone, start, end):
+    """17.1.I (documentType=A87, havi). A kliens saját metódusát használja, ha van (teszt); az entsoe-py 1.0.0-nak nincs ilyen,
+    ezért a nyers kérést mi küldjük. Az API egy éves időtartam-korlátja miatt legfeljebb 12 hónapos darabokban kérünk."""
+    fn = getattr(client, "query_financial_balance", None)
+    if fn:
+        return fn(zone, start, end)
+    from entsoe.mappings import lookup_area
+    area = lookup_area(zone)
+    rows, sample, a = [], None, start
+    while a < end:
+        b = min(a + pd.DateOffset(months=12), end)
+        r = client._base_request(params={"documentType": "A87", "controlArea_Domain": area.code}, start=a, end=b)
+        rr, sm = parse_financial_balance(r.content)
+        rows += rr
+        sample = sample or sm
+        a = b
+    if not rows:
+        raise_no_data()
+    return rows, sample
+
+
+def raise_no_data():
+    class NoMatchingDataError(Exception):
+        pass
+    raise NoMatchingDataError
+
+
+def finance_summary(res):
+    """Sorok -> {currency, months, up, down}; ugyanarra a hónapra/irányra több érték esetén az utolsó marad."""
+    if not res:
+        return None
+    rows, sample = res
+    months = sorted({r["month"] for r in rows})
+    out = {"currency": next((r["currency"] for r in rows if r["currency"]), ""), "months": months, "up": [], "down": []}
+    for d in ("up", "down"):
+        by = {r["month"]: r["amount"] for r in rows if r["dir"] == d}
+        out[d] = [by.get(m) for m in months]
+    other = sorted({r["dir"] for r in rows} - {"up", "down"})
+    if other:
+        out["other_directions"] = other
+    out["raw_structure"] = sample
+    return out
+
+
+def bids_updown(df, idx):
+    """12.3.E (aggregált szabályozási energia ajánlatok): (irány, mrid, 'Offered'|'Activated') oszlopokból irányonként összeg.
+    Egy irányban több termékidősor (standard, egyedi, helyi…) lehet; a teljesítmények összeadódnak."""
+    out = {}
+    for d in ("Up", "Down"):
+        for what in ("Activated", "Offered"):
+            cols = [c for c in df.columns if isinstance(c, tuple) and c[0] == d and str(c[-1]) == what]
+            if cols:
+                s = df[cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+                out[f"{d.lower()}_{what.lower()}"] = hourly_list(s, idx)
+    return out
+
+
+def price_updown(df, idx):
+    """17.1.F (aktivált szabályozási energia ára): 'Up' / 'Down' oszlopok órás átlaga."""
+    out = {}
+    for d in ("Up", "Down"):
+        if d in df.columns:
+            out[d.lower()] = hourly_list(pd.to_numeric(df[d], errors="coerce"), idx)
+    return out
+
+
 def outage_rows(df, now, kind):
     """ENTSO-E kiesési dokumentumok -> tömör lista (legutóbbi változat, nem törölt, az ablakba eső)."""
     if df is None or not len(df):
@@ -383,7 +501,7 @@ def updown(df):
     return up, dn
 
 
-def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, workers=8):
+def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, workers=8, plant_hours=72):
     now = now or pd.Timestamp.now(tz="UTC")
     start = (now - pd.Timedelta(hours=hours)).floor("h")
     local = now.tz_convert("Europe/Budapest").normalize()
@@ -402,6 +520,14 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
     B.add("nap/szél előrejelzés", lambda: client.query_wind_and_solar_forecast(HOME, start=start, end=end))
     B.add("eltérési ár", lambda: client.query_imbalance_prices(HOME, start=start, end=end))
     B.add("eltérési mennyiség", lambda: client.query_imbalance_volumes(HOME, start=start, end=end))
+    # aFRR/mFRR: a régi 17.1.E közlést a GL EB 12.3.E aggregált ajánlatok váltja ki (A24), ezért az az elsődleges;
+    # a régi lekérdezés tartalék marad arra az esetre, ha az új adatkörben nincs adat.
+    for pt, tag in (("A51", "afrr"), ("A47", "mfrr")):
+        B.add(f"aggregált ajánlatok {tag}", lambda pt=pt: client.query_aggregated_bids(HOME, pt, start=start, end=end))
+    for bt, tag in (("A96", "afrr"), ("A97", "mfrr")):
+        B.add(f"aktivált energia ára {tag}", lambda bt=bt: client.query_activated_balancing_energy_prices(HOME, start=start, end=end, process_type="A16", business_type=bt))
+    fin_start = (now.tz_convert("Europe/Budapest").normalize().replace(day=1) - pd.DateOffset(months=23))
+    B.add("pénzügyi mérleg (17.1.I)", lambda: query_financial_balance(client, HOME, fin_start, now.tz_convert("Europe/Budapest").normalize() + pd.Timedelta(days=1)))
     for bt, tag in (("A96", "afrr"), ("A97", "mfrr")):
         B.add(f"szabályozási energia {tag}", lambda bt=bt: client.query_activated_balancing_energy(HOME, start=start, end=end, business_type=bt))
     B.add("beépített teljesítmény", lambda: client.query_installed_generation_capacity(HOME, start=cap_start, end=now))
@@ -413,7 +539,8 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
     for code in NTC_BORDERS:
         B.add(f"NTC {code}→HU", lambda code=code: client.query_net_transfer_capacity_dayahead(code, HOME, start=start, end=end))
         B.add(f"NTC HU→{code}", lambda code=code: client.query_net_transfer_capacity_dayahead(HOME, code, start=start, end=end))
-    B.add("blokkszintű termelés", lambda: client.query_generation_per_plant(HOME, start=start, end=end))
+    plant_start = max(start, (now - pd.Timedelta(hours=plant_hours)).floor("h"))   # a leglassabb lekérdezés: rövidebb ablak
+    B.add("blokkszintű termelés", lambda: client.query_generation_per_plant(HOME, start=plant_start, end=end))
     B.add("termelő-kiesések", lambda: client.query_unavailability_of_generation_units(HOME, start=ow_start, end=ow_end))
     for code in NEIGHBOURS:
         for a_, b_ in ((code, HOME), (HOME, code)):
@@ -475,7 +602,7 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
 
     # ---- blokkszintű termelés
     units = []
-    pdf = A("blokkszintű termelés", lambda: client.query_generation_per_plant(HOME, start=start, end=end))
+    pdf = A("blokkszintű termelés", lambda: client.query_generation_per_plant(HOME, start=plant_start, end=end))
     if pdf is not None:
         for c in pdf.columns:
             name = c[0] if isinstance(c, tuple) else str(c)
@@ -516,12 +643,22 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
     if iv is not None:
         imbalance["volume"] = hourly_list(iv.iloc[:, 0] if isinstance(iv, pd.DataFrame) else iv, idx)
     balancing = {}
-    for bt, tag in (("A96", "afrr"), ("A97", "mfrr")):
-        bdf = A(f"szabályozási energia {tag}", lambda bt=bt: client.query_activated_balancing_energy(HOME, start=start, end=end, business_type=bt))
-        if bdf is not None:
-            up, dn = updown(bdf)
+    for pt, tag in (("A51", "afrr"), ("A47", "mfrr")):
+        got = A(f"aggregált ajánlatok {tag}")
+        if got is not None:
+            for k, v in bids_updown(got, idx).items():          # up_activated, down_offered, ...
+                d, what = k.split("_")
+                balancing[f"{tag}_{d}" if what == "activated" else f"{tag}_{d}_offered"] = v
+        legacy = A(f"szabályozási energia {tag}")                # régi 17.1.E: csak ha az új nem adott semmit
+        if legacy is not None and f"{tag}_up" not in balancing and f"{tag}_down" not in balancing:
+            up, dn = updown(legacy)
             balancing[f"{tag}_up"] = None if up is None else hourly_list(up, idx)
             balancing[f"{tag}_down"] = None if dn is None else hourly_list(dn, idx)
+        pr = A(f"aktivált energia ára {tag}")
+        if pr is not None:
+            for d, v in price_updown(pr, idx).items():
+                balancing[f"{tag}_price_{d}"] = v
+    finance = finance_summary(A("pénzügyi mérleg (17.1.I)"))
 
     B.close()
     errors = B.errors + B.notes()
@@ -538,6 +675,7 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
         "outages_tx": bool(outages_tx),
         "imbalance": have(imbalance),
         "balancing": have(balancing),
+        "finance": bool(finance),
     }
     return {
         "generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -555,6 +693,7 @@ def collect_engineer(client, now=None, hours=48, main=None, budget_s=240, worker
         "outages_tx": outages_tx,
         "imbalance": imbalance,
         "balancing": balancing,
+        "finance": finance,
         "modules": modules,
         "errors": errors,
         "missing": B.missing,
@@ -584,6 +723,102 @@ def collect_europe(client, now=None, budget_s=120, workers=8):
     return out
 
 
+def _corr(a, b):
+    """Két azonos indexű Series Pearson-korrelációja (csak a közös, érvényes pontokon); nincs elég adat -> None."""
+    d = pd.concat([a, b], axis=1).dropna()
+    if len(d) < 12 or d.iloc[:, 0].std() == 0 or d.iloc[:, 1].std() == 0:
+        return None
+    return float(d.iloc[:, 0].corr(d.iloc[:, 1]))
+
+
+def collect_countries(client, now=None, hours=168, budget_s=240, workers=8, zones=None):
+    """Más országok (zónák) óránkénti adatai a mérnöki oldal országválasztójához (countries.json):
+    fogyasztás (tény, előrejelzés), termelés típusonként, nap/szél előrejelzés, nettó import (day-ahead nettó pozíció),
+    eltérési ár. A magyar adat az engineer.json-ban van, ide nem kerül.
+
+    A nettó pozíciót az entsoe-py pozitívnak adja exportnál; az oldalnak importra van szüksége (import = pozitív).
+    Az előjelet zónánként ellenőrizzük: a nettó importnak a fogyasztás és a hazai termelés különbségével
+    egyirányban kell mozognia. Ha a korreláció egyértelműen negatív, a sorozatot megfordítjuk, és ezt a "netpos_flipped" jelzi."""
+    now = now or pd.Timestamp.now(tz="UTC")
+    zones = [z for z in (zones or EUROPE_ZONES) if z != HOME]
+    start = (now - pd.Timedelta(hours=hours)).floor("h")
+    local = now.tz_convert("Europe/Budapest").normalize()
+    end = (local + pd.DateOffset(days=2)).tz_convert("UTC")
+    idx = pd.date_range(start, end, freq="h", tz="UTC", inclusive="left")
+    B = Batch(budget_s, workers=workers)
+    # fontossági sorrend: először mindenhol a fogyasztás és a termelés, aztán a többi
+    for z in zones:
+        B.add(f"fogyasztás {z}", lambda z=z: client.query_load(z, start=start, end=end))
+        B.add(f"termelés {z}", lambda z=z: client.query_generation(z, start=start, end=end, nett=True))
+    for z in zones:
+        B.add(f"nettó pozíció {z}", lambda z=z: client.query_net_position(z, start=start, end=end, dayahead=True))
+        B.add(f"fogyasztás előrejelzés {z}", lambda z=z: client.query_load_forecast(z, start=start, end=end))
+    for z in zones:
+        B.add(f"nap/szél előrejelzés {z}", lambda z=z: client.query_wind_and_solar_forecast(z, start=start, end=end))
+        B.add(f"eltérési ár {z}", lambda z=z: client.query_imbalance_prices(z, start=start, end=end))
+
+    out_z, flipped, corr_log = {}, [], {}
+    for z in zones:
+        rec = {}
+        la = B.get(f"fogyasztás {z}")
+        lf = B.get(f"fogyasztás előrejelzés {z}")
+        if la is not None or lf is not None:
+            rec["load"] = {"actual": hourly_list(la, idx), "forecast": hourly_list(lf, idx)}
+        gdf = B.get(f"termelés {z}")
+        gen_total = None
+        if gdf is not None:
+            by_type = flatten_types(gdf)
+            rec["generation"] = group_sum(by_type, idx)
+            parts = [pd.Series(v, index=idx, dtype="float64") for v in rec["generation"].values()]
+            if parts:
+                gen_total = pd.concat(parts, axis=1).sum(axis=1, min_count=len(parts))
+        fdf = B.get(f"nap/szél előrejelzés {z}")
+        if fdf is not None:
+            ft = flatten_types(fdf)
+            sw = {}
+            for k, names in {"solar": ["Solar"], "wind": ["Wind Onshore", "Wind Offshore"]}.items():
+                got = [ft[n].reindex(idx) for n in names if n in ft]
+                sw[k] = to_list(pd.concat(got, axis=1).sum(axis=1, min_count=1)) if got else None
+            if any(v is not None for v in sw.values()):
+                rec["solar_wind_forecast"] = sw
+        npos = B.get(f"nettó pozíció {z}")
+        if npos is not None:
+            net = hourly_mean(npos.iloc[:, 0] if isinstance(npos, pd.DataFrame) else npos).reindex(idx) * -1   # import = pozitív
+            if rec.get("load", {}).get("actual") is not None and gen_total is not None:
+                resid = pd.Series(rec["load"]["actual"], index=idx, dtype="float64") - gen_total
+                c = _corr(net, resid)
+                corr_log[z] = None if c is None else round(c, 2)
+                if c is not None and c < -0.3:
+                    net, _ = net * -1, flipped.append(z)
+            rec["net_import_mw"] = to_list(net)
+        ip = B.get(f"eltérési ár {z}")
+        if ip is not None:
+            cols = {str(c).lower(): c for c in ip.columns}
+            lc = next((v for k, v in cols.items() if "long" in k), None)
+            sc = next((v for k, v in cols.items() if "short" in k), None)
+            imb = {"long": hourly_list(ip[lc], idx) if lc is not None else None,
+                   "short": hourly_list(ip[sc], idx) if sc is not None else None}
+            if lc is None and sc is None:
+                imb["long"] = hourly_list(ip.iloc[:, 0], idx)
+            rec["imbalance"] = imb
+        if rec:
+            out_z[z] = rec
+    B.close()
+    return {
+        "generated_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "source": "ENTSO-E Transparency Platform",
+        "demo": False,
+        "hourly_ts": iso(idx),
+        "names": {z: EUROPE_ZONES[z] for z in zones},
+        "zones": out_z,
+        "co2": {"factors": CO2_FACTORS, "source": CO2_SOURCE},
+        "netpos_corr": corr_log,
+        "netpos_flipped": flipped,
+        "errors": B.errors + B.notes(),
+        "missing": B.missing,
+    }
+
+
 def write_json(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -596,7 +831,9 @@ def main():
     p.add_argument("--out", default="data.json")
     p.add_argument("--engineer-out", default=None, help="alapértelmezés: engineer.json a --out mellett")
     p.add_argument("--skip-engineer", action="store_true", help="a mérnöki adatkörök kihagyása")
-    p.add_argument("--hours", type=int, default=48, help="ennyi órára visszamenőleg kéri az adatokat")
+    p.add_argument("--hours", type=int, default=168, help="ennyi órára visszamenőleg kéri az adatokat (az oldalak időablaka ebből választ)")
+    p.add_argument("--countries-budget", type=int, default=150, help="az országadatok időkerete másodpercben")
+    p.add_argument("--skip-countries", action="store_true", help="az országválasztó adatainak (countries.json) kihagyása")
     p.add_argument("--workers", type=int, default=8, help="egyszerre ennyi ENTSO-E kérés fut")
     p.add_argument("--budget", type=int, default=240, help="a fő és a mérnöki rész időkerete külön-külön, másodpercben")
     args = p.parse_args()
@@ -647,6 +884,27 @@ def main():
     lack = [k for k, v in eng["modules"].items() if not v]
     print(f"Kész: {eng_out} | van adat: {got} | nincs: {lack} | hibák: {len(eng['errors'])}")
     for e in eng["errors"]:
+        print("  -", e)
+    fin = eng.get("finance")
+    print("17.1.I pénzügyi mérleg:", "nincs adat" if not fin else f"{len(fin['months'])} hónap ({fin['months'][0]}–{fin['months'][-1]}), pénznem: {fin['currency']}, irányok: up/down{(' + ' + str(fin['other_directions'])) if fin.get('other_directions') else ''}")
+    if fin:
+        print("  nyers szerkezet:", json.dumps(fin.get("raw_structure"), ensure_ascii=False)[:400])
+    print("aFRR/mFRR/szabályozás adatai:", sorted(k for k, v in (eng.get("balancing") or {}).items() if v) or "nincs")
+
+    if args.skip_countries:
+        return
+    cn_out = os.path.join(os.path.dirname(os.path.abspath(args.out)), "countries.json")
+    try:
+        cn = collect_countries(client, hours=args.hours, budget_s=args.countries_budget, workers=args.workers)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001
+        print(f"FIGYELEM: az országadatok gyűjtése meghiúsult ({exc.__class__.__name__}: {exc}); a countries.json nem íródik felül.")
+        return
+    if not cn["zones"]:
+        print("FIGYELEM: az országadatokra semmi sem érkezett; a countries.json nem íródik felül.")
+        return
+    write_json(cn_out, cn)
+    print(f"Kész: {cn_out} | zónák: {sorted(cn['zones'])} | nettó pozíció előjele megfordítva: {cn['netpos_flipped']} | korreláció: {cn['netpos_corr']} | hibák: {len(cn['errors'])}")
+    for e in cn["errors"][:30]:
         print("  -", e)
 
 

@@ -181,6 +181,66 @@ def test_europe():
     print(f"6. európai ár-pillanatkép rendben ({len(eu['zones'])} zóna)")
 
 
+def test_countries():
+    """Országválasztó adatai (countries.json): minden zónára fogyasztás, termelés, nettó import; az előjel-ellenőrzés."""
+    cn = col.collect_countries(FakeClient(NOW), now=NOW, hours=168, budget_s=60)
+    assert "DE_LU" in cn["zones"] and "HU" not in cn["zones"], sorted(cn["zones"])
+    n = len(cn["hourly_ts"])
+    assert n >= 168 + 24, n
+    z = cn["zones"]["AT"]
+    assert len(z["load"]["actual"]) == n and len(z["net_import_mw"]) == n
+    assert set(z["generation"]) >= {"nuclear", "gas", "solar"}
+    assert cn["netpos_flipped"] == [], cn["netpos_flipped"]       # a helyes konvenciót nem fordítja meg
+    json.dumps(cn, allow_nan=False)
+    # fordított előjelű forrás: a gyűjtő észreveszi és megfordítja
+    bad = FakeClient(NOW)
+    bad.netpos_export_positive = False
+    cn2 = col.collect_countries(bad, now=NOW, hours=168, budget_s=60, zones=["AT", "SK"])
+    assert sorted(cn2["netpos_flipped"]) == ["AT", "SK"], cn2["netpos_flipped"]
+    a, b = cn["zones"]["AT"]["net_import_mw"], cn2["zones"]["AT"]["net_import_mw"]
+    assert all(abs(x - y) < 1e-6 for x, y in zip(a, b) if x is not None and y is not None)
+    print(f"7. országadatok rendben ({len(cn['zones'])} zóna, {n} óra, előjel-ellenőrzés működik)")
+
+
+def test_balancing_and_finance():
+    """aFRR/mFRR az új (12.3.E) adatkörből, aktivált energia ára, 17.1.I havi pénzügyi mérleg és a nyers A87-XML értelmezése."""
+    eng = col.collect_engineer(FakeClient(NOW), now=NOW, hours=168)
+    b = eng["balancing"]
+    for k in ("afrr_up", "afrr_down", "afrr_up_offered", "mfrr_up", "mfrr_down_offered", "afrr_price_up", "mfrr_price_down"):
+        assert b.get(k) and any(v is not None for v in b[k]), k
+    # a két termékidősor aktivált teljesítménye összeadódik (0,8 + 0,2 arány): az összeg a teljes aktivált érték
+    up = [v for v in b["afrr_up"] if v is not None]
+    off = [v for v in b["afrr_up_offered"] if v is not None]
+    assert max(off) > max(up) > 0
+    f = eng["finance"]
+    assert f["currency"] == "HUF" and len(f["months"]) >= 23 and len(f["up"]) == len(f["months"]) == len(f["down"]), f and f["months"]
+    assert eng["modules"]["finance"] is True
+    # nyers A87-XML: irány a pont alatt (Financial_Price/direction) és idősor-szinten, ZIP-ben és anélkül
+    import io
+    import zipfile
+    pt = ("<Point><position>{pos}</position><Financial_Price><amount>{amt}</amount><direction>{d}</direction></Financial_Price></Point>")
+    xml = ("<?xml version='1.0'?><Balancing_MarketDocument xmlns='urn:iec62325.351:tc57wg16:451-6:balancingdocument:4:5'><type>A87</type>"
+           "<TimeSeries><mRID>1</mRID><businessType>A99</businessType><currency_Unit.name>HUF</currency_Unit.name><curveType>A01</curveType>"
+           "<Period><timeInterval><start>2025-12-31T23:00Z</start><end>2026-02-28T23:00Z</end></timeInterval><resolution>P1M</resolution>"
+           + pt.format(pos=1, amt="1087522143", d="A01") + pt.format(pos=2, amt="1200000000", d="A01") + "</Period></TimeSeries>"
+           "<TimeSeries><mRID>1</mRID><businessType>A99</businessType><currency_Unit.name>HUF</currency_Unit.name><curveType>A01</curveType>"
+           "<Period><timeInterval><start>2025-12-31T23:00Z</start><end>2026-02-28T23:00Z</end></timeInterval><resolution>P1M</resolution>"
+           + pt.format(pos=1, amt="32564550", d="A02") + pt.format(pos=2, amt="-5000", d="A02") + "</Period></TimeSeries></Balancing_MarketDocument>")
+    rows, sample = col.parse_financial_balance(xml.encode())
+    got = {(r["month"], r["dir"]): r["amount"] for r in rows}
+    assert got == {("2026-01", "up"): 1087522143.0, ("2026-02", "up"): 1200000000.0, ("2026-01", "down"): 32564550.0, ("2026-02", "down"): -5000.0}, got
+    assert rows[0]["currency"] == "HUF" and sample["resolution"] == "P1M"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Financial_expenses_and_income_for_balancing.xml", xml)
+    rows2, _ = col.parse_financial_balance(buf.getvalue())
+    assert rows2 == rows
+    fs = col.finance_summary((rows, sample))
+    assert fs["months"] == ["2026-01", "2026-02"] and fs["up"] == [1087522143.0, 1200000000.0] and fs["down"] == [32564550.0, -5000.0]
+    json.dumps(eng, allow_nan=False)
+    print("8. aFRR/mFRR (12.3.E), aktivált energia ára és 17.1.I pénzügyi mérleg rendben")
+
+
 if __name__ == "__main__":
     # a with_retry várakozását kikapcsoljuk, hogy a hibatesztek ne lassúak legyenek
     col.time.sleep = lambda s: None
@@ -190,4 +250,6 @@ if __name__ == "__main__":
     test_budget()
     test_parallel()
     test_europe()
+    test_countries()
+    test_balancing_and_finance()
     print("MINDEN TESZT ÁTMENT")
